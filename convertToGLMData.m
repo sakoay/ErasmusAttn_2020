@@ -15,18 +15,24 @@
 % Created :  05-Oct-2020 14:02:23
 % Author  :  Sue Ann Koay (koay@princeton.edu)
 %
-function convertToGLMData(data, dataLabel, outputPath)
+function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
   
+  %% Default arguments
+  if ~exist('timeBinMS', 'var') || isempty(timeBinMS)
+    timeBinMS         = 50;
+  end
+
   %% Determine output location
-  outputFile          = fullfile(outputPath, sprintf('glmExpt_%s_%dcells.mat', dataLabel, numel(data)));
+  outputFile          = fullfile(outputPath, sprintf('glmExpt_%s_%dcells_%dms.mat', dataLabel, numel(data), timeBinMS));
   
   %% Setup experiment data structure 
-  experiment          = buildGLM.initExperiment('ms', 10, dataLabel);
+  experiment          = buildGLM.initExperiment('ms', timeBinMS, dataLabel);
   
   % Ephys
   experiment          = buildGLM.registerSpikeTrain(experiment, 'SS', 'Simple spikes');
   
   % Task conditions
+  experiment          = buildGLM.registerValue(experiment, 'trial_nr', 'Index of trial by temporal order in experiment');
   experiment          = buildGLM.registerValue(experiment, 'condition_code', '0 = aborted trial, 1 = incorrect trial, 2 = correct trial, 3 = omitted reward, 4 = random reward');
   experiment          = buildGLM.registerValue(experiment, 'direction_C', '1 = right, 3 = down, 5 = left, 7 = top');
   experiment          = buildGLM.registerValue(experiment, 'gap_direction', 'Orientation of the gap in the C');
@@ -34,7 +40,7 @@ function convertToGLMData(data, dataLabel, outputPath)
   experiment          = buildGLM.registerValue(experiment, 'saccade_amplitude', 'Degrees of deflection in detected saccade');
 
   % Task events
-  experiment          = buildGLM.registerTiming(experiment, 'fix_on', 'Monkey initiates tiral by fixation');
+  experiment          = buildGLM.registerTiming(experiment, 'fix_on', 'Monkey initiates trial by fixation');
   experiment          = buildGLM.registerTiming(experiment, 'cue_start', 'Onset of priming cue for where on screen the C will appear');
   experiment          = buildGLM.registerTiming(experiment, 'cue_stop', 'Offset of priming cue');
   experiment          = buildGLM.registerTiming(experiment, 'c_start', 'Onset of the C that indicates the correct action direction');
@@ -99,7 +105,7 @@ function convertToGLMData(data, dataLabel, outputPath)
         switch experiment.type.(info{iField})
           case 'spike train'
             %% Convert spike timings from seconds to ms, and select only spikes within the range of this trial
-            ephys     = source.(info{iField}) * 1000;      % convert s -> ms
+            ephys     = double(source.(info{iField})) * 1000;       % convert s -> ms
             ephys( ephys < ephysStart | ephys > ephysStop ) = [];
 
             %% Align timing info to trial start instead of 0 = fixation on
@@ -110,14 +116,14 @@ function convertToGLMData(data, dataLabel, outputPath)
               %% Special case for non-trials
               trial.(info{iField})   = nan;
             else
-              trial.(info{iField})   = source.(info{iField}) - ephysStart;
+              trial.(info{iField})   = double(source.(info{iField})) - ephysStart;
             end
           case 'continuous'
             %% Compute temporally binned average
-            trial.(info{iField})     = rebin(source.(info{iField}), experiment.binSize, 1);
+            trial.(info{iField})     = rebin(double(source.(info{iField})), experiment.binSize, 1);
           otherwise
             %% Verbatim
-            trial.(info{iField})     = source.(info{iField});
+            trial.(info{iField})     = double(source.(info{iField}));
         end
       end
       

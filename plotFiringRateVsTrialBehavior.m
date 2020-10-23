@@ -143,7 +143,13 @@ function fig = plotCellData(data, experiment)
         set(axs, 'xtick', ticks, 'xticklabel', tickLabels(iOrder), 'xticklabelrotation', 90);
       end
       
+      %% Use grid to indicate time scale
       drawnow;
+      xRange              = get(axs, 'xlim');
+      yRange              = get(axs, 'ylim');
+      xGrid               = 0:1000:xRange(2);         % 1 second intervals
+      uistack(line( 'parent', axs, 'xdata', colvec(repmat(xGrid,3,1)), 'ydata', colvec(repmat([yRange(:); nan],1,numel(xGrid)))       ...
+                  , 'linestyle', '-.', 'color', [1 1 1]*0.7 ), 'bottom');
     end
   end
   
