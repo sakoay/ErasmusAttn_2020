@@ -12,7 +12,7 @@ classdef CategorizedModel
     target            = []            % the time series data predicted by this model
     design            = []            % design matrix specifying covariates used to predict target 
     prediction        = []            % cross-validated prediction for target 
-    shufflePvalue     = []            % p-value of this model 
+    model             = []            % fitted model
     regressors        = struct()      % fitted weights, time axis and waveforms for regressors
 
     shuffleExp        = []            % shuffled time indices used to generate null hypotheses where there is no relationship between target and regressors
@@ -241,39 +241,35 @@ classdef CategorizedModel
                                             
 %         fitInfo                   = linearSupportVectorMR( obj(iObj).target, obj(iObj).design.X, obj(iObj).cvTrainSel, obj(iObj).shuffleExp, bootstrapExp, [], [], [], true );
         
-        %% Perform fits for each (shuffled) experiment data
-        tic
-        modelW                    = nan(size(obj(iObj).design.X,2) + 1, size(obj(iObj).shuffleExp,2));
-        deviance                  = nan(1, size(obj(iObj).shuffleExp,2));
-        parfor iExp = 1:size(obj(iObj).shuffleExp,2)
-          [modelW(:,iExp), deviance(iExp)]      ...
-                                  = glmfit(obj(iObj).design.X, obj(iObj).target(obj(iObj).shuffleExp(:,iExp)), 'poisson', 'link', 'log');
-        end
-        toc
+        %% Stepwise regression model to select a parsimonious subset of covariates to explain data
+        obj(iObj).model           = stepwiseglm( data, 'constant', 'Criterion', 'Deviance', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true, 'Upper', 'linear', 'Verbose', 0 );
+        
+        %% Retrieve coefficient matrix with zeros for non-selected regressors
+        [~,varIndex]              = ismember(obj(iObj).model.CoefficientNames(2:end), data.Properties.VariableNames);
+        modelW                    = zeros(size(data,2), 1);
+        modelW(1)                 = obj(iObj).model.Coefficients{'(Intercept)', 'Estimate'};
+        modelW(varIndex)          = obj(iObj).model.Coefficients{2:end, 'Estimate'};
         
         %% Cross-validated predictions
-        tic
-        cvW                       = nan(size(obj(iObj).design.X,2) + 1, size(obj(iObj).shuffleExp,2));
+%         cvW                       = nan(size(obj(iObj).design.X,2) + 1, size(obj(iObj).shuffleExp,2));
         cvPrediction              = nan(size(obj(iObj).target));
         for iCV = 1:size(obj(iObj).cvTrainSel,2)
           %% Train model on a subset of data
-          tic
           trainSel                = obj(iObj).cvTrainSel(:,iCV);
 %           [cvW(:,iCV),~,stats]    = glmfit(obj(iObj).design.X(trainSel,:), obj(iObj).target(trainSel), 'poisson', 'link', 'log');
-          model                   = stepwiseglm( data(trainSel,:), 'constant', 'Criterion', 'Deviance', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true, 'Upper', 'linear', 'Verbose', 0 );
-          toc
+          trainModel              = fitglm( data(trainSel,[varIndex, end]), 'linear', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true );
           
           %% Evaluate model on left-out test data
           testSel                 = ~trainSel;
-          cvPrediction(testSel)   = glmval(cvW(:,iCV), obj(iObj).design.X(testSel,:), 'log');
+%           cvPrediction(testSel)   = glmval(cvW(:,iCV), obj(iObj).design.X(testSel,:), 'log');
+          cvPrediction(testSel)   = trainModel.predict(data(testSel,varIndex));
         end
-        toc
         
         %% Store fitted parameters
         obj(iObj).regressors      = buildGLM.combineWeights(obj(iObj).design, modelW(2:end,1));
         obj(iObj).regressors.offset = modelW(1,1);
         obj(iObj).prediction      = cvPrediction;
-        obj(iObj).shufflePvalue   = mean( deviance <= deviance(1) );    % N.B. the unshuffled experiment is included as a pseudo-count to provide a conservative nonzero estimate
+%         obj(iObj).shufflePvalue   = mean( deviance <= deviance(1) );    % N.B. the unshuffled experiment is included as a pseudo-count to provide a conservative nonzero estimate
       end
     end
     

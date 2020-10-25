@@ -92,7 +92,7 @@ function model = buildHierarchicalModel(model, conditionLabels, cfg)
   while ~isempty(conditionLabels)
     %% Generate further specialized models per candidate condition 
     candModel               = cell(size(conditionLabels));
-    parfor iCond = 1:numel(conditionLabels)
+    for iCond = 1:numel(conditionLabels)
       %% Construct models for all possible partitions of values for a given condition label
       tryModels             = model.specialize(conditionLabels{iCond});
       for iTry = numel(tryModels):-1:1
