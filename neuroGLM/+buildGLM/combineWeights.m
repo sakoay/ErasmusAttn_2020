@@ -6,8 +6,9 @@ function [wout] = combineWeights(dm, w)
 %   w: weight on the basis functions
 %
 % Output
-%   wout.(label).data = combined weights
-%   wout.(label).tr = time axis
+%   wout.(label).basisW = weights for each basis function
+%   wout.(label).response = combined weights
+%   wout.(label).time = time axis
 
 dspec = dm.dspec;
 binSize = dspec.expt.binSize;
@@ -40,21 +41,23 @@ for kCov = 1:numel(dspec.covar)
     basis = covar.basis;
 
     if isempty(basis)
-	w_sub = w(startIdx(kCov) + (1:covar.edim) - 1);
-	wout.(covar.label).tr = ((1:size(w_sub, 1))-1 + covar.offset) * binSize;
-	wout.(covar.label).data = w_sub;
-	continue;
+      w_sub = w(startIdx(kCov) + (1:covar.edim) - 1);
+      wout.(covar.label).basisW = w_sub;       % SAK
+      wout.(covar.label).time = ((1:size(w_sub, 1))-1 + covar.offset) * binSize;
+      wout.(covar.label).response = w_sub;
+    	continue;
     end
 
     assert(isstruct(basis), 'Basis structure is not a structure?');
 
     sdim = covar.edim / basis.edim;
-    wout.(covar.label).data = zeros(size(basis.B, 1), sdim);
+    wout.(covar.label).response = zeros(size(basis.B, 1), sdim);
     for sIdx = 1:sdim
-	w_sub = w(startIdx(kCov) + (1:basis.edim)-1 + basis.edim * (sIdx - 1));
-	w2_sub = sum(bsxfun(@times, basis.B, w_sub(:)'), 2);
-	wout.(covar.label).data(:, sIdx) = w2_sub;
+      w_sub = w(startIdx(kCov) + (1:basis.edim)-1 + basis.edim * (sIdx - 1));
+      w2_sub = sum(bsxfun(@times, basis.B, w_sub(:)'), 2);
+      wout.(covar.label).basisW = w_sub;       % SAK
+      wout.(covar.label).response(:, sIdx) = w2_sub;
     end
-    wout.(covar.label).tr = ...
+    wout.(covar.label).time = ...
 	(basis.tr(:, 1) + covar.offset) * binSize * ones(1, sdim);
 end
