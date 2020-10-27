@@ -7,9 +7,9 @@ function dspec = addCovariateTiming(dspec, covLabel, stimLabel, desc, varargin)
 %	regressors. Negative (positive) integers represent anti-causal (causal)
 %	effects.
 
-if ~isstruct(dspec)
-    error('First argument must be a design specification structure');
-end
+% if ~isstruct(dspec)
+%     error('First argument must be a design specification structure');
+% end
 
 if nargin < 3; stimLabel = covLabel; end
 if nargin < 4; desc = covLabel; end
@@ -23,11 +23,11 @@ if isempty(stimLabel)
 end
 
 %% Check that the stimLabel corresponds to a timing variable
-if ~isfield(dspec, 'expt')
-    error('Invalid design spec structure.');
-else
+% if ~isfield(dspec, 'expt')
+%     error('Invalid design spec structure.');
+% else
     expt = dspec.expt;
-end
+% end
 
 if ~isfield(expt.type, stimLabel)
     error('Label [%s] is not registered in experiment structure', stimLabel);

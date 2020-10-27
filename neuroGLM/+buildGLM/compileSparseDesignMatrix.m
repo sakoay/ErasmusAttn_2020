@@ -1,4 +1,4 @@
-function dm = compileSparseDesignMatrix(dspec, trialIndices)
+function [dm, trialBins] = compileSparseDesignMatrix(dspec, trialIndices)
 % Compile information from experiment according to given DesignSpec
 
 %% Build design matrix
@@ -8,7 +8,8 @@ subIdxs = buildGLM.getGroupIndicesFromDesignSpec(dspec);
 totalT = sum(ceil([expt.trial(trialIndices).duration]/expt.binSize));
 
 growingX = sparse([], [], [], 0, dspec.edim, round(totalT * dspec.edim * 0.001)); % preallocate
-trialX = nan(totalT,1);   % SAK : store index of the trial corresponding to a given row of the design matrix
+trialX = nan(totalT,1);                 % SAK : store index of the trial corresponding to a given row of the design matrix
+trialBins = cell(1,max(trialIndices));  % SAK : store rows of the design matrix corresponding to the input set of trials
 
 trialIndices = trialIndices(:)';
 
@@ -33,7 +34,9 @@ for kTrial = trialIndices
             miniX(:, sidx) = stim;
         end
     end
-    trialX(size(growingX,1) + (1:nT)) = kTrial;   % SAK
+    
+    trialBins{kTrial} = size(growingX,1) + (1:nT);  % SAK
+    trialX(trialBins{kTrial}) = kTrial;             % SAK
     growingX = [growingX; sparse(miniX)]; %#ok<AGROW>
 end
 

@@ -27,9 +27,9 @@ if nargout < 1
     error('Output must be assigned back to a design structure');
 end
 
-if ~isstruct(dspec)
-    error('First argument must be a structure created from buildGLM.initDesignSpec');
-end
+% if ~isstruct(dspec)
+%     error('First argument must be a structure created from buildGLM.initDesignSpec');
+% end
 
 if ~ischar(covLabel)
     error('Covariate label must be a string');

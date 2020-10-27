@@ -6,6 +6,7 @@ function dspec = initDesignSpec(expt)
 % design -- different covariates to include, different parameterization,
 % or some nonlinear transformation/feature.
 
-dspec = struct('expt', expt);
+% dspec = struct('expt', expt);
+dspec = buildGLM.ModelSpecification(expt);      % SAK
 dspec.covar = struct();
 dspec.idxmap = struct(); % reverse positional indexing

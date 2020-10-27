@@ -1,5 +1,5 @@
 % Regression model for a subset of trials specified by some category selection criteria
-classdef CategorizedModel
+classdef CategorizedModel < handle
   
   %_________________________________________________________________________________________________
   properties (SetAccess = protected)
@@ -12,12 +12,10 @@ classdef CategorizedModel
     target            = []            % the time series data predicted by this model
     design            = []            % design matrix specifying covariates used to predict target 
     prediction        = []            % cross-validated prediction for target 
-    model             = []            % fitted model
+    fitInfo           = []            % fit information for model, with cross-validated goodness of fit (fitInfo.Deviance)
     regressors        = struct()      % fitted weights, time axis and waveforms for regressors
 
-    shuffleExp        = []            % shuffled time indices used to generate null hypotheses where there is no relationship between target and regressors
     cvTrainSel        = []            % selection vector for subsets of target used to generate training sets for cross-validation
-    altModels         = {}            % alternative models that were considered
     extra             = struct()      % optional user specified information
   end
   
@@ -26,21 +24,22 @@ classdef CategorizedModel
     
     %----- Apply additional trial selections to design matrix
     function [design, selData] = selectTrials(design, selTrials)
-      design.trialIndices(~selTrials)     = [];
+      design.trialIndices(~selTrials)       = [];
 
-      % Select timepoints corresponding to the selected trials
-      selData                             = ismember(design.trialX, design.trialIndices);
-      design.X(~selData,:)                = [];
-      design.trialX(~selData,:)           = [];
+      %% Select timepoints corresponding to the selected trials
+      selData                               = ismember(design.trialX, design.trialIndices);
+      design.X(~selData,:)                  = [];
+      design.trialX(~selData,:)             = [];
 
-      % Remove constant columns of the new design matrix
-      isConst                             = full(all(design.X(1,:) == design.X(2:end,:), 1));
-      design.constCols(~design.constCols) = isConst;
+      %% Remove constant columns of the new design matrix
+      if ~isempty(design.X)
+        isConst                             = full(all(design.X(1,:) == design.X(2:end,:), 1));
+        design.constCols(~design.constCols) = isConst;
+      end
     end
     
     %----- Structure conversion to load an object of this class from disk
     function obj = loadobj(frozen)
-      
       %% HACK : I have no idea why this can sometimes already be the target type
       if isa(frozen, 'CategorizedModel')
         obj = frozen;
@@ -59,6 +58,7 @@ classdef CategorizedModel
       
       %% Restore raw data from progenitor models
       for iObj = 1:numel(obj)
+        obj(iObj).ID      = CategorizedModel.nextID();
         if ~obj(iObj).hasProgenitor()
           continue;
         end
@@ -74,8 +74,8 @@ classdef CategorizedModel
     %----- Get the next available ID for unique model identification
     function id = nextID(reset)
       persistent tally;
-      if nargin > 0 && reset
-        tally   = 0;
+      if nargin > 0
+        tally   = reset;
       elseif isempty(tally)
         tally   = 1;
       else
@@ -84,14 +84,40 @@ classdef CategorizedModel
       id        = tally;
     end
 
-    %----- Variance explained: R^2 = 1 - SS_res / SS_tot where SS_x is the sum-squared values
-    function R2 = computeVarExplained(target, prediction)
-      sel     = isfinite(target);
-      SSres   = sum( (target(sel) - prediction(sel)  ).^2, 1 );
-      SStot   = sum( (target(sel) - mean(target(sel))).^2, 1 );
-      R2      = 1 - SSres / SStot;
+    
+    %----- Log likelihood for Poisson distributed data
+    function lnL = poissonLogLikelihood(target, prediction, varargin)
+      lnL = -prediction + target .* log(prediction) - gammaln(target + 1);
+      lnL = sum(lnL, 1);
     end
     
+    %----- Deviance for Poisson distributed data: twice the difference between the log-likelihood of the fitted model and the saturated model
+    function dev = poissonDeviance(target, prediction, varargin)
+      dev = 2*( target .* log((target + (target==0)) ./ prediction) - (target - prediction) );
+      dev = sum(dev, 1);
+    end
+    
+    %----- Bayesian Information Criteria for LASSO
+    function bic = poissonBIC(target, prediction, activeSet)
+      neg2LnL       = -CategorizedModel.poissonLogLikelihood(target, prediction);
+      if islogical(activeSet)
+        dof         = sum(activeSet, 1);
+      else
+        dof         = activeSet;
+      end
+      bic           = neg2LnL + dof * (log(size(target,1)) / size(target,1));
+    end
+    
+    %----- Aikaike Information Criteria for LASSO
+    function aic = poissonAIC(target, prediction, activeSet)
+      neg2LnL       = -CategorizedModel.poissonLogLikelihood(target, prediction);
+      if islogical(activeSet)
+        dof         = sum(activeSet, 1);
+      else
+        dof         = activeSet;
+      end
+      aic           = neg2LnL + dof * (2 / size(target,1));
+    end
   end
     
   %_________________________________________________________________________________________________
@@ -141,6 +167,48 @@ classdef CategorizedModel
         end
       end
     end
+    
+    %----- Recursively find the maximum model ID value
+    function id = maxID(obj)
+      id      = max([obj.ID]);
+      for iObj = 1:numel(obj)
+        if obj(iObj).hasProgenitor()
+          id  = max(id, obj(iObj).progenitor.maxID());
+        end
+      end
+    end
+    
+    %----- Locate unique models by ID
+    function [C,ia,ic] = unique(obj)
+      [~, ia, ic] = unique([obj.ID]);
+      C           = obj(ia);
+    end
+    
+    %----- Display information and inheritance tree
+    function print(obj, prefix)
+      %% Default arguments
+      if ~exist('prefix', 'var') || isempty(prefix)
+        prefix        = ' ';
+      end
+
+      %% Print each model in this set
+      for iObj = 1:numel(obj)
+        fprintf('%s[%3d]  %*s%4d trials : ', prefix, obj(iObj).ID, 15-numel(prefix), '', obj(iObj).numberOfTrials());
+        if isempty(obj(iObj).categoryLabel)
+          fprintf('%33s', '');
+        else
+          fprintf('%15s = %-15s', obj(iObj).categoryLabel, mat2str(obj(iObj).categoryValues'));
+        end
+        if ~isempty(obj(iObj).fitInfo)
+          fprintf(' ... %3d parameters, lnL = %.10g', obj(iObj).effectiveDegreesOfFreedom(), obj(iObj).goodnessOfFit());
+        end
+        fprintf('\n');
+        if obj(iObj).hasProgenitor()
+          obj(iObj).progenitor.print([repmat(' ',size(prefix)), '\--']);
+        end
+      end
+    end
+
     
     %----- Whether this model is a specialization of a more general model that includes trials with all values of categoryLabel
     function yes = hasProgenitor(obj)
@@ -194,94 +262,191 @@ classdef CategorizedModel
         end
       end
     end
+    
+    %----- Get the effective number of degrees of freedom i.e. nonzero L1-regularized coefficients
+    function dof = effectiveDegreesOfFreedom(obj)
+      dof           = nan(size(obj));
+      for iObj = 1:numel(obj)
+        if ~isempty(obj(iObj).fitInfo)
+          dof(iObj) = sum(obj(iObj).fitInfo.activeSet(:,obj(iObj).fitInfo.IndexMinDeviance), 1);
+        end
+      end
+    end
 
     
     %----- Create more specialized models from all possible partitions of the data by values of a given category
-    function subModels = specialize(obj, categoryLabel)
-
-      if numel(obj) > 1
-        error('CategorizedModel:specialize', 'This function should be called on individual CategorizedModel objects.');
+    function subModels = specialize(obj, categoryLabel, allPartitions, minNumTrials)
+      %% Default arguments
+      if ~exist('allPartitions', 'var') || isempty(allPartitions)
+        allPartitions               = false;
+      end
+      if ~exist('minNumTrials', 'var') || isempty(minNumTrials)
+        minNumTrials                = 5;
+      end
+      
+      %% All models are required to be based on the same data
+      experiment                    = obj(1).design.dspec.expt;
+      if any(~arrayfun(@(x) isequal(x.design.dspec.expt.id,experiment.id), obj(2:end)))
+        error('CategorizedModel:specialize', 'Inconsistent experimental data encountered for the given set of models.');
       end
       
       %% Identify all partitions of values of dataCategory in the dataset for this model
-      dataCategory                = cat(1, obj.design.dspec.expt.trial.(categoryLabel));
-      category                    = dataCategory(obj.design.trialIndices);
-      categValues                 = unique(category);
-      categorySets                = partitions(categValues);
+      dataCategory                  = cat(1, experiment.trial.(categoryLabel));
+      category                      = unique(dataCategory(accumfun(2, @(x) x.design.trialIndices, obj)));
+      if allPartitions
+        categorySets                = partitions(category);
+      else
+        categorySets                = {num2cell(category)};
+      end
       categorySets( cellfun(@numel, categorySets) < 2 ) = [];     % disallow trivial partitions
-        
+
       %% Create models per partition
-      subModels                   = repmat({repmat(CategorizedModel,0)}, size(categorySets));
+      subModels                     = repmat({repmat(CategorizedModel,0)}, size(categorySets));
       for iSet = 1:numel(categorySets)
-        for iVal = 1:numel(categorySets{iSet})
-          %% Apply further trial selection to design matrix
-          [design, selData]       = CategorizedModel.selectTrials(obj.design, ismember(category, categorySets{iSet}{iVal}));
-          
-          %% Construct a more specialized model
-          model                   = CategorizedModel(obj.target(selData), design);
-          model.progenitor        = obj;
-          model.categoryLabel     = categoryLabel;
-          model.categoryValues    = categorySets{iSet}{iVal};
-          subModels{iSet}(end+1)  = model;
+        for iObj = 1:numel(obj)      
+          for iVal = 1:numel(categorySets{iSet})
+            %% Apply further trial selection to design matrix
+            [design, selData]       = CategorizedModel.selectTrials(obj(iObj).design, ismember(dataCategory(obj(iObj).design.trialIndices), categorySets{iSet}{iVal}));
+            if isempty(design.X)    % no data in this category
+              continue;
+            end
+
+            %% Construct a more specialized model if possible
+            model                   = CategorizedModel(obj(iObj).target(selData), design);
+            model.progenitor        = obj(iObj);
+            model.categoryLabel     = categoryLabel;
+            model.categoryValues    = categorySets{iSet}{iVal};
+            if model.numberOfTrials() < minNumTrials || model.numberOfTrials() == obj(iObj).numberOfTrials()
+              %% If there is insufficient data for model fitting, or no specialization, inherit the parent model for this subset of data
+              model.prediction      = obj(iObj).prediction(ismember(obj(iObj).design.trialX, design.trialIndices));
+              model.fitInfo         = obj(iObj).fitInfo;
+              model.regressors      = obj(iObj).regressors;
+            end
+            subModels{iSet}(end+1)  = model;
+          end
         end
       end
-      
     end
     
     %----- Fit regression model
-    function obj = regress(obj, nShuffles, nCVFolds)
+    function obj = regress(obj, nCVFolds, nLambdas, lazy)
+      %% Default arguments
+      if ~exist('nLambdas', 'var') || isempty(nLambdas)
+        nLambdas                      = 10;
+      end
+      if ~exist('lazy', 'var') || isempty(lazy)
+        lazy                          = false;
+      end
+
+      %% GLM configuration
+      fitOpts                         = {'poisson', 'Link', 'log', 'MaxIter', 1e5};
+      
       %% Fit model for each configuration of model specifications and data to explain
       for iObj = 1:numel(obj)
+        if lazy && ~isempty(obj(iObj).prediction)
+          continue;
+        end
+        
         %% Define cross-validation selection and shuffled data
-        trialLength               = SplitVec(obj(iObj).design.trialX, 'equal', 'length');
-        [obj(iObj).shuffleExp, bootstrapExp, obj(iObj).cvTrainSel]       ...
-                                  = permutationExperiments(trialLength, nShuffles, 0, nCVFolds);
-        data                      = cell2table( num2cell([obj(iObj).design.X, obj(iObj).target])      ...
-                                              , 'VariableNames', [accumfun(2, @(x) arrayfun(@(y) sprintf('%s_b%d',x.label,y), 1:x.edim, 'uniformoutput', false), obj(iObj).design.dspec.covar), {'firing_rate'}] );
-                                            
+        trialLength                   = SplitVec(obj(iObj).design.trialX, 'equal', 'length');
+        [~,~,obj(iObj).cvTrainSel]    = permutationExperiments(trialLength, 0, 0, nCVFolds, 2);
+        xvalPartitions                = cvpartition(numel(trialLength), 'KFold', nCVFolds);
+                                
+        designX                       = full(obj(iObj).design.X);
+        targetY                       = obj(iObj).target;
+%         fitglm(designX, targetY, 'linear', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true );
+        
 %         fitInfo                   = linearSupportVectorMR( obj(iObj).target, obj(iObj).design.X, obj(iObj).cvTrainSel, obj(iObj).shuffleExp, bootstrapExp, [], [], [], true );
+
+        %% Use cross-validation to determine regularization strength
+        xvalPartitions.Impl           = CustomCVPartition(obj(iObj).cvTrainSel(:,:,1));
+        [modelW,obj(iObj).fitInfo]    = lassoglm(designX, targetY, fitOpts{:}, 'NumLambda', nLambdas, 'CV', xvalPartitions);
+
+        lambdaRatio                   = obj(iObj).fitInfo.LambdaMinDeviance / obj(iObj).fitInfo.Lambda(end);
+%         obj(iObj).fitInfo.LambdaL1   = obj(iObj).fitInfo.Lambda .* obj(iObj).fitInfo.Alpha;
+%         obj(iObj).fitInfo.LambdaL2   = obj(iObj).fitInfo.Lambda .* (1 - obj(iObj).fitInfo.Alpha)/2;
+        obj(iObj).fitInfo.activeSet   = modelW ~= 0;
         
-        %% Stepwise regression model to select a parsimonious subset of covariates to explain data
-        obj(iObj).model           = stepwiseglm( data, 'constant', 'Criterion', 'Deviance', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true, 'Upper', 'linear', 'Verbose', 0 );
-        
-        %% Retrieve coefficient matrix with zeros for non-selected regressors
-        [~,varIndex]              = ismember(obj(iObj).model.CoefficientNames(2:end), data.Properties.VariableNames);
-        modelW                    = zeros(size(data,2), 1);
-        modelW(1)                 = obj(iObj).model.Coefficients{'(Intercept)', 'Estimate'};
-        modelW(varIndex)          = obj(iObj).model.Coefficients{2:end, 'Estimate'};
-        
-        %% Cross-validated predictions
-%         cvW                       = nan(size(obj(iObj).design.X,2) + 1, size(obj(iObj).shuffleExp,2));
-        cvPrediction              = nan(size(obj(iObj).target));
-        for iCV = 1:size(obj(iObj).cvTrainSel,2)
-          %% Train model on a subset of data
-          trainSel                = obj(iObj).cvTrainSel(:,iCV);
-%           [cvW(:,iCV),~,stats]    = glmfit(obj(iObj).design.X(trainSel,:), obj(iObj).target(trainSel), 'poisson', 'link', 'log');
-          trainModel              = fitglm( data(trainSel,[varIndex, end]), 'linear', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true );
-          
-          %% Evaluate model on left-out test data
-          testSel                 = ~trainSel;
-%           cvPrediction(testSel)   = glmval(cvW(:,iCV), obj(iObj).design.X(testSel,:), 'log');
-          cvPrediction(testSel)   = trainModel.predict(data(testSel,varIndex));
+%         lassoPlot(cvW,cvFitInfo,'plottype','CV');
+
+        %% Use an independent set of cross-validation folds to evaluate goodness of fit
+        if lambdaRatio < 1
+          cvPrediction                = nan(size(obj(iObj).target));
+          for iCV = 1:nCVFolds
+            %% Train model on a subset of data
+            trainSel                  = obj(iObj).cvTrainSel(:,iCV,2);
+            [cvW,cvInfo]              = lassoglm(designX, targetY, fitOpts{:}, 'NumLambda', 2, 'LambdaRatio', lambdaRatio);
+
+            %% Evaluate model on left-out test data
+            testSel                   = ~trainSel;
+            cvPrediction(testSel)     = glmval([cvInfo.Intercept(1); cvW(:,1)], designX(testSel,:), 'log');
+          end
+        else
+          cvPrediction                = zeros(size(obj(iObj).target));
         end
         
         %% Store fitted parameters
-        obj(iObj).regressors      = buildGLM.combineWeights(obj(iObj).design, modelW(2:end,1));
-        obj(iObj).regressors.offset = modelW(1,1);
-        obj(iObj).prediction      = cvPrediction;
+        obj(iObj).prediction          = cvPrediction;
+        obj(iObj).regressors          = buildGLM.combineWeights(obj(iObj).design, modelW(:,obj(iObj).fitInfo.IndexMinDeviance));
+        obj(iObj).regressors.bias     = obj(iObj).fitInfo.Intercept(obj(iObj).fitInfo.IndexMinDeviance);
 %         obj(iObj).shufflePvalue   = mean( deviance <= deviance(1) );    % N.B. the unshuffled experiment is included as a pseudo-count to provide a conservative nonzero estimate
       end
     end
     
+    %----- Combined prediction of the given set of category-specialized models
+    function [predict, allTarget] = jointPrediction(obj)
+      %% Special case of a single model
+      if numel(obj) == 1
+        predict           = obj.prediction;
+        if nargout > 1
+          allTarget       = obj.target;
+        end
+        return;
+      end
+      
+      %% All models are required to be based on the same data
+      experiment          = obj(1).design.dspec.expt;
+      if any(~arrayfun(@(x) isequal(x.design.dspec.expt.id,experiment.id), obj(2:end)))
+        error('CategorizedModel:jointPrediction', 'Inconsistent experimental data encountered for the given set of models.');
+      end
+
+      %% Not necessary : The union of all models in this set are required to explain all data
+      %{
+      nTrials             = numel(obj(1).design.dspec.expt.trial);
+      trials              = accumfun(1, @(x) x.trialIndices(:), [obj.design]);
+      if numel(trials) ~= nTrials || ~isequal(sort(trials), (1:nTrials)')
+        error('CategorizedModel:jointPrediction', 'Union of models in the given set must explain all of the data (%d trials).', nTrials);
+      end
+      %}
+      
+      %% Collect predictions from all models
+      predict             = nan(experiment.numTimeBins, 1);
+      if nargout > 1
+        allTarget         = nan(experiment.numTimeBins, 1);
+      end
+      
+      for iObj = 1:numel(obj)
+        bins              = [obj(iObj).design.dspec.expt.trialBins{obj(iObj).design.trialIndices}];
+        predict(bins)     = obj(iObj).prediction;
+        if nargout > 1
+          allTarget(bins) = obj(iObj).target;
+        end
+      end
+    end
     
-    %----- Variance explained: R^2 = 1 - SS_res / SS_tot where SS_x is the sum-squared values
-    function gof = varExplained(obj)
+    %----- Cross-validated goodness of fit: gofFcn(target,prediction,activeSet) can be poissonLogLikelihood() %etc.
+    function gof = goodnessOfFit(obj, gofFcn)
+      %% Default arguments
+      if ~exist('gofFcn', 'var') || isempty(gofFcn)
+        gofFcn            = @CategorizedModel.poissonLogLikelihood;
+      end
+      
       %% Preallocate output 
-      nExperiments      = max(arrayfun(@(x) size(x.prediction,2), obj));
+      nExperiments        = max(arrayfun(@(x) size(x.prediction,2), obj));
       if nExperiments > 1
-        gof             = nan(nExperiments, numel(obj));
+        gof               = nan(nExperiments, numel(obj));
       else
-        gof             = nan(size(obj));
+        gof               = nan(size(obj));
       end
       
       %% Loop over models
@@ -289,58 +454,35 @@ classdef CategorizedModel
         if isempty(obj(iObj).prediction)
           continue;
         end
-        
-        %% Coefficient of variation
-        R2              = CategorizedModel.computeVarExplained(obj(iObj).target, obj(iObj).prediction);
         if nExperiments > 1
-          gof(:,iObj)   = R2;
+          gof(:,iObj)     = gofFcn(obj(iObj).target, obj(iObj).prediction, obj(iObj).fitInfo.activeSet);
         else
-          gof(iObj)     = R2;
+          gof(iObj)       = gofFcn(obj(iObj).target, obj(iObj).prediction, obj(iObj).fitInfo.activeSet);
         end
       end
     end
     
-    %----- Cohen's f^2 for effect size of model A vs. (reference) B: (R^2_A - R^2_B) / (1 - R^2_A)
-    function effect = relativeEffectSize(obj, reference)
-      if isnumeric(reference)
-        refR2             = reference;
-      else
-        refR2             = reference.varExplained();
+    %----- Relative likelihood of this set of category-specialized models vs. the unspecialized parent model
+    function relLikeli = relativeLikelihood(obj, gofFcn)
+      %% Default arguments
+      if ~exist('gofFcn', 'var') || isempty(gofFcn)
+        gofFcn            = @CategorizedModel.poissonLogLikelihood;
       end
-      effect              = obj.varExplained();
-      effect              = (effect - refR2) ./ (1 - effect);
-    end
-    
-    %----- Cohen's f^2 for local effect size vs. progenitor: (R^2_model - R^2_progen) / (1 - R^2_model)
-    % Selya, A. S., Rose, J. S., Dierker, L. C., Hedeker, D. & Mermelstein, R. J. 
-    % A Practical Guide to Calculating Cohen’s f2, a Measure of Local Effect Size, from PROC MIXED.
-    % Front. Psychol. 3, (2012).
-    function effect = localEffectSize(obj)
-      %% All models are required to have the same parent model
-      parent              = [obj.progenitor];
+      
+      %% Get the set of all unique parent models
       if any(~obj.hasProgenitor())
-        error('CategorizedModel:localEffectSize', 'Only defined for models with a parent model.');
-      elseif any(parent(1).ID ~= [parent(2:end).ID])
-        error('CategorizedModel:localEffectSize', 'Inconsistent parent models encountered.');
+        error('CategorizedModel:relativeLikelihood', 'Only defined for model sets with parent models.');
       end
-      parent              = parent(1);
+      parent              = unique([obj.progenitor]);
       
-      %% The union of all models in this set are required to explain the same data as their parent model
-      trials              = accumfun(1, @(x) x.trialIndices(:), [obj.design]);
-      if numel(trials) ~= numel(parent.design.trialIndices) || ~isempty(setdiff(parent.design.trialIndices, trials))
-        error('CategorizedModel:localEffectSize', 'Union of models in the given set must explain the same data as the parent model.');
-      end
+      %% Construct test statistic as the difference between model goodness of fit
+      [setPredict, allTarget] = obj.jointPrediction();
+      jointGOF            = gofFcn(allTarget, setPredict              , sum(obj.effectiveDegreesOfFreedom()));
+      parentGOF           = gofFcn(allTarget, parent.jointPrediction(), sum(parent.effectiveDegreesOfFreedom()));
       
-      %% Collect predictions from all models
-      jointPredict        = nan(size(parent.target));
-      for iObj = 1:numel(obj)
-        subData           = ismember(parent.design.trialX, obj(iObj).design.trialIndices);
-        jointPredict(subData) = obj(iObj).prediction;
-      end
-      R2                  = CategorizedModel.computeVarExplained(parent.target, jointPredict);
-      
-      %% Cohen's f^2
-      effect              = (R2 - parent.varExplained()) / (1 - R2);
+      %% Relative likelihood N.B. assuming that the goodness-of-fit is equivalent to the log-likelihood
+      % A small value indicates that the specialized model is more probable than the parent model
+      relLikeli           = exp(parentGOF - jointGOF);
     end
     
     %----- Sorts models in the given set, given a goodness-of-fit function
