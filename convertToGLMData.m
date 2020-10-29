@@ -33,7 +33,7 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
   
   % Task conditions
   experiment          = buildGLM.registerValue(experiment, 'trial_nr', 'Index of trial by temporal order in experiment');
-  experiment          = buildGLM.registerValue(experiment, 'condition_code', '0 = aborted trial, 1 = incorrect trial, 2 = correct trial, 3 = omitted reward, 4 = random reward');
+  experiment          = buildGLM.registerValue(experiment, 'condition_code', '0 = abort trial, 1 = error trial, 2 = correct trial, 3 = omit reward, 4 = random reward');
   experiment          = buildGLM.registerValue(experiment, 'direction_C', '1 = right, 3 = down, 5 = left, 7 = top');
   experiment          = buildGLM.registerValue(experiment, 'gap_direction', 'Orientation of the gap in the C');
   experiment          = buildGLM.registerValue(experiment, 'reward_duration', 'Amount of juice received');

@@ -2,11 +2,18 @@
 classdef CategorizedModel < handle
   
   %_________________________________________________________________________________________________
+  properties (Constant)
+    REGINDEX          = 'IndexMinDeviance';
+%     REGINDEX          = 'Index1SE';
+    REGLAMBDA         = strrep(CategorizedModel.REGINDEX, 'Index', 'Lambda')
+  end
+  
+  %_________________________________________________________________________________________________
   properties (SetAccess = protected)
     ID                = []            % unique identifier for each model, not changed upon copying
     
     progenitor        = []            % the parent model that includes data across all values of this model's category
-    categoryLabel     = []            % the trial category label that is used to select data used in this model fit
+    categoryLabel     = ''            % the trial category label that is used to select data used in this model fit
     categoryValues    = []            % values of categoryLabel that are included in the selected data in the fit for this model
 
     target            = []            % the time series data predicted by this model
@@ -53,6 +60,13 @@ classdef CategorizedModel < handle
       for field = fieldnames(frozen)'
         for iObj = 1:numel(frozen)
           obj(iObj).(field{:})  = frozen(iObj).(field{:});
+        end
+      end
+      
+      %% HACK : ensure that category labels are strings
+      for iObj = 1:numel(frozen)
+        if isempty(obj(iObj).categoryLabel)
+          obj(iObj).categoryLabel = '';
         end
       end
       
@@ -168,16 +182,6 @@ classdef CategorizedModel < handle
       end
     end
     
-    %----- Recursively find the maximum model ID value
-    function id = maxID(obj)
-      id      = max([obj.ID]);
-      for iObj = 1:numel(obj)
-        if obj(iObj).hasProgenitor()
-          id  = max(id, obj(iObj).progenitor.maxID());
-        end
-      end
-    end
-    
     %----- Locate unique models by ID
     function [C,ia,ic] = unique(obj)
       [~, ia, ic] = unique([obj.ID]);
@@ -187,13 +191,19 @@ classdef CategorizedModel < handle
     %----- Display information and inheritance tree
     function print(obj, prefix)
       %% Default arguments
-      if ~exist('prefix', 'var') || isempty(prefix)
-        prefix        = ' ';
+      if exist('prefix', 'var') && ~isempty(prefix)
+        label         = prefix;
+      else
+        prefix        = '';
       end
 
       %% Print each model in this set
       for iObj = 1:numel(obj)
-        fprintf('%s[%3d]  %*s%4d trials : ', prefix, obj(iObj).ID, 15-numel(prefix), '', obj(iObj).numberOfTrials());
+        if isempty(prefix)
+          label       = sprintf('%3d -- ', iObj);
+        end
+        
+        fprintf('%s[%5d]  %*s%4d trials : ', label, obj(iObj).ID, 20-numel(label), '', obj(iObj).numberOfTrials());
         if isempty(obj(iObj).categoryLabel)
           fprintf('%33s', '');
         else
@@ -204,7 +214,7 @@ classdef CategorizedModel < handle
         end
         fprintf('\n');
         if obj(iObj).hasProgenitor()
-          obj(iObj).progenitor.print([repmat(' ',size(prefix)), '\--']);
+          obj(iObj).progenitor.print([repmat(' ',1,conditional(isempty(prefix),5,numel(prefix))), '\--']);
         end
       end
     end
@@ -216,6 +226,16 @@ classdef CategorizedModel < handle
       for iObj = 1:numel(obj)
         if ~isempty(obj(iObj).progenitor)
           yes(iObj) = true;
+        end
+      end
+    end
+    
+    %----- Get the list of unique IDs for all parent models of the given set, or nan for models that have none
+    function id = parentID(obj)
+      id            = nan(size(obj));
+      for iObj = 1:numel(obj)
+        if ~isempty(obj(iObj).progenitor)
+          id(iObj)  = obj(iObj).progenitor.ID;
         end
       end
     end
@@ -234,25 +254,6 @@ classdef CategorizedModel < handle
       end
     end
     
-    %----- Get the set of all trial categories that this model is specialized for
-    function labels = categories(obj, singletonOutput)
-      labels            = cell(size(obj));
-      for iObj = 1:numel(obj)
-        if obj(iObj).hasProgenitor()
-          labels{iObj}  = [obj(iObj).progenitor.categories(), {obj(iObj).categoryLabel}];
-        elseif isempty(obj(iObj).categoryLabel)
-          labels{iObj}  = {};
-        else
-          labels{iObj}  = {obj(iObj).categoryLabel};
-        end
-      end
-      
-      %% Special case for single objects
-      if numel(obj) == 1 && (nargin < 2 || ~singletonOutput)
-        labels          = labels{1};
-      end
-    end
-    
     %----- Get the number of trials in the data specified for this model
     function count = numberOfTrials(obj)
       count           = nan(size(obj));
@@ -267,9 +268,95 @@ classdef CategorizedModel < handle
     function dof = effectiveDegreesOfFreedom(obj)
       dof           = nan(size(obj));
       for iObj = 1:numel(obj)
-        if ~isempty(obj(iObj).fitInfo)
-          dof(iObj) = sum(obj(iObj).fitInfo.activeSet(:,obj(iObj).fitInfo.IndexMinDeviance), 1);
+        if isempty(obj(iObj).fitInfo)
+        elseif isfield(obj(iObj).fitInfo, 'modelW')
+          dof(iObj) = sum(obj(iObj).fitInfo.modelW(:,obj(iObj).fitInfo.(CategorizedModel.REGINDEX)) ~= 0, 1);
+        else
+          dof(iObj) = sum(obj(iObj).fitInfo.activeSet(:,obj(iObj).fitInfo.(CategorizedModel.REGINDEX)), 1);
         end
+      end
+    end
+    
+    %----- Get the values of all specializations that define this model 
+    function specs = specializations(obj, asString)
+      %% Default arguments
+      if ~exist('asString', 'var') || isempty(asString)
+        asString      = false;
+      end
+
+      %% Check that all objects have the same category specialization
+      if any(~strcmp(obj(1).categoryLabel, {obj(2:end).categoryLabel}))
+        error('CategorizedModel:specializations', 'Inconsistent category specializations for objects in this set.');
+      end
+      
+      %% Inherit specializations of parent
+      if obj(1).hasProgenitor
+        specs         = obj(1).progenitor.specializations(asString);
+        for iObj = 2:numel(obj)
+          specs(iObj) = obj(iObj).progenitor.specializations(asString);
+        end
+        specs         = reshape(specs, size(obj));
+      else
+        specs         = repmat(struct(), size(obj));
+      end
+      
+      %% Register category values
+      if ~isempty(obj(1).categoryLabel)
+        for iObj = 1:numel(obj)
+          if asString
+            specs(iObj).(obj(iObj).categoryLabel) = mat2str(obj(iObj).categoryValues);
+          else
+            specs(iObj).(obj(iObj).categoryLabel) = obj(iObj).categoryValues;
+          end
+        end
+      end
+    end
+    
+    %----- Get the set of all trial categories that this model is specialized for
+    function labels = categories(obj)
+      %% Check that all objects have the same category specialization
+      if any(~strcmp(obj(1).categoryLabel, {obj(2:end).categoryLabel}))
+        error('CategorizedModel:categories', 'Inconsistent category specializations for objects in this set.');
+      end
+      
+      if isempty(obj(1).categoryLabel)
+        labels  = {};
+      else
+        labels  = {obj(1).categoryLabel};
+      end
+      
+      %% Concatenate categories for parent models
+      if obj(1).hasProgenitor()
+        parent  = [obj.progenitor];
+        labels  = [parent.categories(), labels];
+      end
+    end
+    
+    %----- Describe this set of models as the hierarchy of category specializations
+    function specs = hierarchy(obj)
+      if obj(1).hasProgenitor()
+        %% Check that all objects have the same category specialization
+        if any(~strcmp(obj(1).categoryLabel, {obj(2:end).categoryLabel}))
+          error('CategorizedModel:hierarchy', 'Inconsistent category specializations for objects in this set.');
+        end
+        
+        %% Check that the category values across objects form a partition of possible values (no overlaps)
+        [catSets,objIdx]  = unique(arrayfun(@(x) strrep(mat2str(rowvec(x.categoryValues)),' ',','), obj, 'UniformOutput', false));
+        allValues         = cat(1, obj(objIdx).categoryValues);
+        if numel(unique(allValues)) ~= numel(allValues)
+          error('CategorizedModel:hierarchy', 'Specialization values do not form a partition of %s.', obj(1).categoryLabel);
+        end
+        
+        %% Concatenate hierarchy descriptor for the parent model
+        parent            = unique([obj.progenitor]);
+        parentSpecs       = parent.hierarchy();
+        specs             = [parentSpecs, {[obj(1).categoryLabel, '=', strjoin(catSets,'|')]}];
+      elseif numel(obj) > 1
+        error('CategorizedModel:hierarchy', 'Invalid number %d of models with no parent.', numel(obj));
+      elseif isempty(obj.categoryLabel)
+        specs                 = '';
+      else
+        specs                 = [obj.categoryLabel '=', mat2str(obj.categoryValues)];
       end
     end
 
@@ -329,7 +416,7 @@ classdef CategorizedModel < handle
     end
     
     %----- Fit regression model
-    function obj = regress(obj, nCVFolds, nLambdas, lazy)
+    function obj = regress(obj, nCVFolds, nLambdas, lazy, varargin)
       %% Default arguments
       if ~exist('nLambdas', 'var') || isempty(nLambdas)
         nLambdas                      = 10;
@@ -339,17 +426,21 @@ classdef CategorizedModel < handle
       end
 
       %% GLM configuration
-      fitOpts                         = {'poisson', 'Link', 'log', 'MaxIter', 1e5};
+      fitOpts                         = [{'poisson', 'Link', 'log', 'MaxIter', 1e5}, varargin];
       
       %% Fit model for each configuration of model specifications and data to explain
-      for iObj = 1:numel(obj)
+      cvTrainSel                      = cell(size(obj));
+      fitInfo                         = cell(size(obj));
+      modelW                          = cell(size(obj));
+      cvPrediction                    = cell(size(obj));
+      parfor iObj = 1:numel(obj)
         if lazy && ~isempty(obj(iObj).prediction)
           continue;
         end
         
         %% Define cross-validation selection and shuffled data
         trialLength                   = SplitVec(obj(iObj).design.trialX, 'equal', 'length');
-        [~,~,obj(iObj).cvTrainSel]    = permutationExperiments(trialLength, 0, 0, nCVFolds, 2);
+        [~,~,cvTrainSel{iObj}]        = permutationExperiments(trialLength, 0, 0, nCVFolds, 2);
         xvalPartitions                = cvpartition(numel(trialLength), 'KFold', nCVFolds);
                                 
         designX                       = full(obj(iObj).design.X);
@@ -359,36 +450,51 @@ classdef CategorizedModel < handle
 %         fitInfo                   = linearSupportVectorMR( obj(iObj).target, obj(iObj).design.X, obj(iObj).cvTrainSel, obj(iObj).shuffleExp, bootstrapExp, [], [], [], true );
 
         %% Use cross-validation to determine regularization strength
-        xvalPartitions.Impl           = CustomCVPartition(obj(iObj).cvTrainSel(:,:,1));
-        [modelW,obj(iObj).fitInfo]    = lassoglm(designX, targetY, fitOpts{:}, 'NumLambda', nLambdas, 'CV', xvalPartitions);
+        xvalPartitions.Impl           = CustomCVPartition(cvTrainSel{iObj}(:,:,1));
+        [modelW{iObj},fitInfo{iObj}]  = lassoglm(designX, targetY, fitOpts{:}, 'NumLambda', nLambdas, 'CV', xvalPartitions);
 
-        lambdaRatio                   = obj(iObj).fitInfo.LambdaMinDeviance / obj(iObj).fitInfo.Lambda(end);
-%         obj(iObj).fitInfo.LambdaL1   = obj(iObj).fitInfo.Lambda .* obj(iObj).fitInfo.Alpha;
-%         obj(iObj).fitInfo.LambdaL2   = obj(iObj).fitInfo.Lambda .* (1 - obj(iObj).fitInfo.Alpha)/2;
-        obj(iObj).fitInfo.activeSet   = modelW ~= 0;
+        lambdaRatio                   = fitInfo{iObj}.(CategorizedModel.REGLAMBDA) / fitInfo{iObj}.Lambda(end);
+%         fitInfo{iObj}.LambdaL1   = fitInfo{iObj}.Lambda .* fitInfo{iObj}.Alpha;
+%         fitInfo{iObj}.LambdaL2   = fitInfo{iObj}.Lambda .* (1 - fitInfo{iObj}.Alpha)/2;
         
 %         lassoPlot(cvW,cvFitInfo,'plottype','CV');
 
         %% Use an independent set of cross-validation folds to evaluate goodness of fit
+        predict                       = nan(size(obj(iObj).target));
         if lambdaRatio < 1
-          cvPrediction                = nan(size(obj(iObj).target));
           for iCV = 1:nCVFolds
             %% Train model on a subset of data
-            trainSel                  = obj(iObj).cvTrainSel(:,iCV,2);
-            [cvW,cvInfo]              = lassoglm(designX, targetY, fitOpts{:}, 'NumLambda', 2, 'LambdaRatio', lambdaRatio);
+            trainSel                  = cvTrainSel{iObj}(:,iCV,2);
+            [cvW,cvInfo]              = lassoglm(designX(trainSel,:), targetY(trainSel), fitOpts{:}, 'NumLambda', 2, 'LambdaRatio', lambdaRatio);
+%             [cvW,cvInfo]              = lassoglm(designX(trainSel,:), targetY(trainSel), fitOpts{:}, 'Lambda', fitInfo{iObj}.(CategorizedModel.REGLAMBDA));
 
             %% Evaluate model on left-out test data
             testSel                   = ~trainSel;
-            cvPrediction(testSel)     = glmval([cvInfo.Intercept(1); cvW(:,1)], designX(testSel,:), 'log');
+            predict(testSel)          = glmval([cvInfo.Intercept(1); cvW(:,1)], designX(testSel,:), 'log');
           end
         else
-          cvPrediction                = zeros(size(obj(iObj).target));
+          %% Constant model
+          for iCV = 1:nCVFolds
+            %% Train model on a subset of data
+            trainSel                  = cvTrainSel{iObj}(:,iCV,2);
+            %% Evaluate model on left-out test data
+            predict(~trainSel)        = mean(targetY(trainSel),1);
+          end
+        end
+        cvPrediction{iObj}            = predict;
+      end
+      
+      %% Store fitted parameters
+      for iObj = 1:numel(obj)
+        if lazy && isempty(fitInfo{iObj})
+          continue;
         end
         
-        %% Store fitted parameters
-        obj(iObj).prediction          = cvPrediction;
-        obj(iObj).regressors          = buildGLM.combineWeights(obj(iObj).design, modelW(:,obj(iObj).fitInfo.IndexMinDeviance));
-        obj(iObj).regressors.bias     = obj(iObj).fitInfo.Intercept(obj(iObj).fitInfo.IndexMinDeviance);
+        obj(iObj).fitInfo             = fitInfo{iObj};
+        obj(iObj).fitInfo.modelW      = modelW{iObj};
+        obj(iObj).prediction          = cvPrediction{iObj};
+        obj(iObj).regressors          = buildGLM.combineWeights(obj(iObj).design, modelW{iObj}(:,obj(iObj).fitInfo.(CategorizedModel.REGINDEX)));
+        obj(iObj).regressors.bias     = obj(iObj).fitInfo.Intercept(obj(iObj).fitInfo.(CategorizedModel.REGINDEX));
 %         obj(iObj).shufflePvalue   = mean( deviance <= deviance(1) );    % N.B. the unshuffled experiment is included as a pseudo-count to provide a conservative nonzero estimate
       end
     end
@@ -455,9 +561,9 @@ classdef CategorizedModel < handle
           continue;
         end
         if nExperiments > 1
-          gof(:,iObj)     = gofFcn(obj(iObj).target, obj(iObj).prediction, obj(iObj).fitInfo.activeSet);
+          gof(:,iObj)     = gofFcn(obj(iObj).target, obj(iObj).prediction, obj(iObj).effectiveDegreesOfFreedom());
         else
-          gof(iObj)       = gofFcn(obj(iObj).target, obj(iObj).prediction, obj(iObj).fitInfo.activeSet);
+          gof(iObj)       = gofFcn(obj(iObj).target, obj(iObj).prediction, obj(iObj).effectiveDegreesOfFreedom());
         end
       end
     end

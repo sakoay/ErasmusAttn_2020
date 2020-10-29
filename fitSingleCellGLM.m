@@ -11,21 +11,22 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   %% Analysis configuration
   cfg                 = struct();
   
+  % Cross validation and permutation tests
+  cfg.nCVFolds        = 5;
+  cfg.nLambdas        = 10;
+  cfg.maxRelLikeli    = 0.1;            % maximum relative likelihood of models to continue specialization
+  
   % Trial selection criteria
   cfg.maxCueStart     = 300;            % maximum allowed interval from fixation on to cue presentation, in ms
   cfg.selectConditions= 1:2;            % keep only trials with these condition_code
-  cfg.minNumTrials    = 10;             % minimum number of trials for fitting models
+  cfg.minNumTrials    = cfg.nCVFolds;   % minimum number of trials for fitting models
   
   % Maximum duration of neural responses per behavioral event
   cfg.eventDuration   = 1500;           % in ms
   cfg.eventNBasis     = 4;              % number of basis functions to use per event-response
   
-  % Cross validation and permutation tests
-  cfg.nShuffles       = 100;
-  cfg.nBootstrap      = 0;
-  cfg.nCVFolds        = 3;
-  cfg.nLambdas        = 5;
-  cfg.maxRelLikeli    = 0.05;           % maximum relative likelihood of models to continue specialization
+  % Configuration for lassoglm()
+  cfg.fitOptions      = {'Alpha', 0.5};
   
   %% Load data
   if isstruct(dataFile)
@@ -36,12 +37,19 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   
   %% Define output file
   [path,name,ext]     = parsePath(dataFile);
-  name                = ['glmFit_' regexprep(name, '^[^_]+_', '')];
+  name                = sprintf('glmFit_%s_min%dtrials_%.0flikeli', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials, 100*cfg.maxRelLikeli);
+  if ~isempty(cfg.fitOptions)
+    name              = [name '_' strjoin(strcat(cfg.fitOptions(:,1), regexprep(cellfun(@num2str,cfg.fitOptions(:,2),'UniformOutput',false),'[^0-9]','')), '_')];
+  end
   outputFile          = fullfile(path, [name postfix ext]);
   
   %% Specify experimental variables that are included in the model
   cfg.behavEvents     = rowvec(fieldswithvalue(data.experiment.type, 'timing'));
   cfg.behavConditions = rowvec(fieldswithvalue(data.experiment.type, 'value'));
+  
+  % Overly many basis functions can lead to overfitting
+  cfg.behavEvents(~cellfun(@isempty, regexp(cfg.behavEvents, '_stop$', 'once')))  = [];
+  
   % Not sure how to deal with these yet
   cfg.behavConditions = setdiff(cfg.behavConditions, {'trial_nr', 'reward_duration', 'saccade_amplitude'});
   
@@ -54,24 +62,24 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
       error('fitSingleCellGLM:cfg', 'Inconsistent analysis configuration found in old model file %s', outputFile);
     end
   else
+    unspecializedModel= cell(size(data.cellData));
     categoryModel     = cell(size(data.cellData));
     hierarchicalModel = cell(size(data.cellData));
   end
   
   
-  %% Fit model per cell
-  parfor iCell = 1:numel(data.cellData)
-    if ~isempty(categoryModel{iCell}) && ~isempty(hierarchicalModel{iCell})
+  %% Configure models per cell
+  for iCell = 1:numel(data.cellData)
+    if ~isempty(unspecializedModel{iCell})
       continue
     end
     
-    try
-      
     %% Apply trial selection to cell data
     selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                      ...
                       & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)    ...
                       ;
     experiment        = data.experiment;
+    experiment.id     = [data.cellData(iCell).monkey '_' data.cellData(iCell).cell_id];
     experiment.trial  = data.cellData(iCell).trials(selTrials);
     if numel(experiment.trial) < cfg.minNumTrials
       continue;
@@ -103,29 +111,48 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
     firingRate        = full(buildGLM.getBinnedSpikeTrain(experiment, 'SS', design.trialIndices));
     
     %% Fit model with no specialization of regressors by behavior categories
-    fullModel         = CategorizedModel(firingRate, design);
-    fullModel.regress(cfg.nCVFolds, cfg.nLambdas);
-    
-    %% Fit model separately for data per unique category
-    categModel        = fullModel.specialize('behavior_code', false, cfg.minNumTrials);
-    categModel        = categModel{1};
-%     parfor iModel = 1:numel(categModel)
-%       categModel(iModel).regress(cfg.nCVFolds, cfg.nLambdas, true);
-%     end
-    categModel.regress(cfg.nCVFolds, cfg.nLambdas, true);
-    categoryModel{iCell}      = categModel;
+    unspecializedModel{iCell}     = CategorizedModel(firingRate, design);
+  end
   
-    %% Hierarchical model to find a parsimonious set of trial-category-based specializations for this neuron's response
-    hierarchicalModel{iCell}  = buildHierarchicalModel(fullModel, cfg.behavConditions, cfg);
-    
-    catch err
-      displayException(err);
+  %% Fit unspecialized model per cell
+  fprintf('Fitting unspecialized models for %d/%d cells...\n', sum(cellfun(@(x) ~isempty(x) && isempty(x.prediction), unspecializedModel)), numel(data.cellData));
+  parfor iCell = 1:numel(unspecializedModel)
+    if ~isempty(unspecializedModel{iCell}) && isempty(unspecializedModel{iCell}.prediction)
+      unspecializedModel{iCell} = unspecializedModel{iCell}.regress(cfg.nCVFolds, cfg.nLambdas, false, cfg.fitOptions{:});
     end
   end
   
-  %%
-  keyboard
-  save(outputFile, 'categoryModel', 'hierarchicalModel', 'cfg');
+  %% Progressive save
+  save(outputFile, 'unspecializedModel', 'categoryModel', 'hierarchicalModel', 'cfg');
+  
+  %% Fit categorized and hierarchical models per cell
+  fprintf('Fitting specialized models:\n');
+  for iCell = 1:numel(unspecializedModel)
+    fullModel         = unspecializedModel{iCell};
+    if isempty(fullModel) || ~isempty(hierarchicalModel{iCell})
+      continue
+    end
+    
+    tStart            = tic;
+    fprintf('  [%3d]  %-20s', iCell, fullModel.design.dspec.expt.id);
+    drawnow;
+      
+    %% Fit model separately for data per unique category
+    if isempty(categoryModel{iCell})
+      categModel      = fullModel.specialize('behavior_code', false, cfg.minNumTrials);
+      categModel      = categModel{1};
+      categoryModel{iCell}    = categModel.regress(cfg.nCVFolds, cfg.nLambdas, true, cfg.fitOptions{:});
+    end
+  
+    %% Hierarchical model to find a parsimonious set of trial-category-based specializations for this neuron's response
+    if isempty(hierarchicalModel{iCell})
+      hierarchicalModel{iCell}= buildHierarchicalModel(fullModel, cfg.behavConditions, cfg);
+    end
+
+    %% Progressive save
+    save(outputFile, 'unspecializedModel', 'categoryModel', 'hierarchicalModel', 'cfg');
+    fprintf(' ... %gs\n', toc(tStart));
+  end
   
 end
 
@@ -148,13 +175,17 @@ function [model, altModels] = buildHierarchicalModel(basicModel, conditionLabels
       break;
     end
     
-    %% Parallel optimization for all candidate models
-    parfor iCand = 1:numel(candModel)
-      candModel{iCand}      = candModel{iCand}.regress(cfg.nCVFolds, cfg.nLambdas, true);
-    end
+    %% Parallel optimization for all candidate models; N.B. handle objects are modified in place
+    allModels               = [candModel{:}];
+    allModels.regress(cfg.nCVFolds, cfg.nLambdas, true, cfg.fitOptions{:});
     
     %% Select model with the best relative likelihood w.r.t. the less specialized parent model
-    [sortedRelLikeli,iOrder]= sort(cellfun(@(x) x.relativeLikelihood(), candModel), 'ascend');
+    relLikeli               = cellfun(@(x) x.relativeLikelihood(), candModel);
+    if any(isnan(relLikeli))
+      error('buildHierarchicalModel:relLikeli', 'Invalid log-likelihood encountered for model(s) %s', num2str(find(~isfinite(relLikeli))));
+    end
+    
+    [sortedRelLikeli,iOrder]= sort(relLikeli, 'ascend');
     altModels{end+1}        = candModel(iOrder(2:end));
 %     longfigure;   hold on;  [predict,target]=model.jointPrediction; plot(predict);  plot(accumfun(2, @(x) x.jointPrediction, candModel(iOrder([1 end]))));    plot(target,'k');   
     
