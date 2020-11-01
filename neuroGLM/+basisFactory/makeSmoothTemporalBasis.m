@@ -32,13 +32,23 @@ if strcmpi(shape, 'raised cosine')
     % bcenters = round(bcenters); % round to closest ms <-- BAD!!! NEVER DO THIS
     bfun = @(x,period)((abs(x/period)<0.5).*(cos(x*2*pi/period)*.5+.5));
     BBstm = bfun(ttb-repmat(bcenters,nkbins,1), width);
-elseif strcmpi(shape, 'progressive cosine')
-    %% SAK : cosine bumps with progressively x2 increases in width and spacing
+elseif strcmpi(shape, 'progressive cosine x2')
+    %% SAK : cosine bumps with progressively x2 increases in width and spacing, with the first component at zero
     % For raised cosine, the spacing between the centers must be 1/4 of the
     % width of the cosine
-    sigma = nkbins * 4 / ( 2^(nBases+1) - 1 ); % width of first bump
+    sigma = nkbins * 2 / (2^nBases - 1); % width of first bump
     width = 2.^(0:nBases-1) * sigma; % width of each bump
-    bcenters = width / 2;    % location of each bump center
+    bcenters = 1 + [0, (2.^(2:nBases) - 2)*sigma/4];    % location of each bump center
+    bfun = @(x,period)((abs(x./period)<0.5).*(cos(x*2*pi./period)*.5+.5));
+    BBstm = bfun(ttb-bcenters, width);
+%     figure; plot(BBstm)
+elseif strcmpi(shape, 'progressive cosine x1.5')
+    %% SAK : cosine bumps with progressively x2 increases in width and spacing, with the first component at zero
+    % For raised cosine, the spacing between the centers must be 1/4 of the
+    % width of the cosine
+    sigma = nkbins / ((3/2)^nBases - 1); % width of first bump
+    width = (3/2).^(0:nBases-1) * sigma; % width of each bump
+    bcenters = 1 + [0, ((3/2).^(1:nBases-1) - 1)*sigma];    % location of each bump center
     bfun = @(x,period)((abs(x./period)<0.5).*(cos(x*2*pi./period)*.5+.5));
     BBstm = bfun(ttb-bcenters, width);
 %     figure; plot(BBstm)

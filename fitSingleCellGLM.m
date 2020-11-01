@@ -19,11 +19,14 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   % Trial selection criteria
   cfg.maxCueStart     = 300;            % maximum allowed interval from fixation on to cue presentation, in ms
   cfg.selectConditions= 1:2;            % keep only trials with these condition_code
+  cfg.selectPastCond  = 0:4;            % keep only trials with these past_condition
   cfg.minNumTrials    = cfg.nCVFolds;   % minimum number of trials for fitting models
   
   % Maximum duration of neural responses per behavioral event
   cfg.eventDuration   = 1500;           % in ms
   cfg.eventNBasis     = 4;              % number of basis functions to use per event-response
+%   cfg.eventDuration   = 2000;           % in ms
+%   cfg.eventNBasis     = 5;              % number of basis functions to use per event-response
   
   % Configuration for lassoglm()
   cfg.fitOptions      = {'Alpha', 0.5};
@@ -37,7 +40,8 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   
   %% Define output file
   [path,name,ext]     = parsePath(dataFile);
-  name                = sprintf('glmFit_%s_min%dtrials_%.0flikeli', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials, 100*cfg.maxRelLikeli);
+%   name                = sprintf('glmFit_%s_min%dtrials_%.0flikeli', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials, 100*cfg.maxRelLikeli);
+  name                = sprintf('glmFit_%s_min%dtrials_%.0fdur', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials, cfg.eventDuration);
   if ~isempty(cfg.fitOptions)
     name              = [name '_' strjoin(strcat(cfg.fitOptions(:,1), regexprep(cellfun(@num2str,cfg.fitOptions(:,2),'UniformOutput',false),'[^0-9]','')), '_')];
   end
@@ -77,11 +81,14 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
     %% Apply trial selection to cell data
     selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                      ...
                       & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)    ...
+                      & ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond)      ...
                       ;
     experiment        = data.experiment;
     experiment.id     = [data.cellData(iCell).monkey '_' data.cellData(iCell).cell_id];
     experiment.trial  = data.cellData(iCell).trials(selTrials);
+    
     if numel(experiment.trial) < cfg.minNumTrials
+      unspecializedModel{iCell} = experiment;
       continue;
     end
     
@@ -99,7 +106,8 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
     modelSpecs        = buildGLM.initDesignSpec(experiment);
 
     % Responses to behavioral events that vary smoothly with time after the event
-    basisFcn          = basisFactory.makeSmoothTemporalBasis('progressive cosine', cfg.eventDuration, cfg.eventNBasis, experiment.binfun);
+    basisFcn          = basisFactory.makeSmoothTemporalBasis('progressive cosine x1.5', cfg.eventDuration, cfg.eventNBasis, experiment.binfun);
+%     figure; plot(basisFcn.tr * experiment.binSize,basisFcn.B)
     for iVar = 1:numel(cfg.behavEvents)
       modelSpecs      = buildGLM.addCovariateTiming(modelSpecs, cfg.behavEvents{iVar}, cfg.behavEvents{iVar}, experiment.desc.(cfg.behavEvents{iVar}), basisFcn);
     end
@@ -115,9 +123,9 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   end
   
   %% Fit unspecialized model per cell
-  fprintf('Fitting unspecialized models for %d/%d cells...\n', sum(cellfun(@(x) ~isempty(x) && isempty(x.prediction), unspecializedModel)), numel(data.cellData));
+  fprintf('Fitting unspecialized models for %d/%d cells...\n', sum(cellfun(@(x) ~isstruct(x) && isempty(x.prediction), unspecializedModel)), numel(data.cellData));
   parfor iCell = 1:numel(unspecializedModel)
-    if ~isempty(unspecializedModel{iCell}) && isempty(unspecializedModel{iCell}.prediction)
+    if ~isstruct(unspecializedModel{iCell}) && isempty(unspecializedModel{iCell}.prediction)
       unspecializedModel{iCell} = unspecializedModel{iCell}.regress(cfg.nCVFolds, cfg.nLambdas, false, cfg.fitOptions{:});
     end
   end
@@ -129,7 +137,7 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   fprintf('Fitting specialized models:\n');
   for iCell = 1:numel(unspecializedModel)
     fullModel         = unspecializedModel{iCell};
-    if isempty(fullModel) || ~isempty(hierarchicalModel{iCell})
+    if isstruct(fullModel) || ~isempty(hierarchicalModel{iCell})
       continue
     end
     
@@ -153,6 +161,9 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
     save(outputFile, 'unspecializedModel', 'categoryModel', 'hierarchicalModel', 'cfg');
     fprintf(' ... %gs\n', toc(tStart));
   end
+  
+  
+  fprintf(' -->  %s\n', outputFile);
   
 end
 

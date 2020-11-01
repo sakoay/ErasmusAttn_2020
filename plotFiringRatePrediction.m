@@ -24,28 +24,13 @@ function model = plotFiringRatePrediction(modelFile)
   
 end
 
-function specs = parseSpecs(specs, lookup)
-  specs         = regexp(specs, '([0-9]+)\s*=\s*([^,]+)', 'tokens');
-  specs         = catcell(1, specs, 2);
-  
-  if nargin < 2 || isempty(lookup)
-    specs       = specs{:};
-  elseif isempty(specs)
-    specs       = arrayfun(@num2str, lookup, 'uniformoutput', false);
-  else
-    specs       = specs{:};
-    [~,iMatch]  = ismember(lookup, cellfun(@str2num,specs(:,1)));
-    specs       = specs(iMatch,2);
-  end
-end
-
 function specs = formatSpecs(specs, conditions, abbreviate)
+  %% Default arguments
   if ~exist('abbreviate', 'var') || isempty(abbreviate)
     abbreviate  = false;
   end
 
-  specs         = regexprep(specs, '_direction[^=]*', '');
-  specs         = regexprep(specs, '^(dir)[^=]*', '$1');
+  %% Replace condition labels
   for iCond = 1:size(conditions,1)
     if abbreviate
       condStr   = regexprep(regexprep(conditions{iCond,2},' .*',''),'(rr).*','$1');
@@ -54,7 +39,14 @@ function specs = formatSpecs(specs, conditions, abbreviate)
     end
     specs       = regexprep(specs, ['(condition_code=\S*)' conditions{iCond,1}], ['$1' condStr]);
   end
-  specs         = regexprep(specs, '^[^=]+=(.*[a-zA-Z].*)$', '$1');
+  
+  %% Additional simplifications
+  specs         = regexprep(specs, '_(direction|condition)[^=]*', '');
+  specs         = regexprep(specs, '^(dir)[^=]*', '$1');
+  specs         = regexprep(specs, '(_loc)ation[^=]*', '$1');
+%   specs         = regexprep(specs, '^[^=]+=(.*[a-zA-Z].*)$', '$1');
+  specs         = regexprep(specs, '^condition_code=', '');
+  specs         = regexprep(specs, '_+', ' ');
 end
 
 function fig = plotPredictionByCondition(model, description, cfg, showDetails)
@@ -76,7 +68,7 @@ function fig = plotPredictionByCondition(model, description, cfg, showDetails)
   [trialCategory, ~, categIndex]    = unique(trialConditions, 'rows');
   
   %% Labels for trial categories
-  categLabel              = arrayfun(@(x) parseSpecs(experiment.desc.(cfg.behavConditions{x}),trialCategory(:,x)), 1:numel(cfg.behavConditions), 'UniformOutput', false);
+  categLabel              = arrayfun(@(x) parseVariableSpecifications(experiment.desc.(cfg.behavConditions{x}),trialCategory(:,x)), 1:numel(cfg.behavConditions), 'UniformOutput', false);
   categLabel              = [categLabel{:}];
   
   %% Configure plots
@@ -246,7 +238,7 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
   %% Use the basic unspecialized model as a comparison
   refModel                = unique(model.firstAncestor);
   experiment              = refModel.design.dspec.expt;
-  conditionCodes          = parseSpecs(experiment.desc.condition_code);
+  conditionCodes          = parseVariableSpecifications(experiment.desc.condition_code);
 
   eventName               = fieldnames(refModel.regressors);
   eventName(~cellfun(@(x) isstruct(refModel.regressors.(x)), eventName))  = [];
@@ -260,6 +252,8 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
   nSubCat                 = cellfun(@numel, catValues(2:end));
   subCatIndex             = sub2ind([nSubCat; 1], catIndex{2:end});
   
+  yRange(:,2:prod(nSubCat)) = 0;
+  
   %% Configure plots
   lineStyle               = {'-.', '-'};
   catColor                = lines(numel(catValues{1}));
@@ -267,10 +261,12 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
     [~,iCond]             = ismember(catValues{1}, conditionCodes(:,1));
     catValues{1}          = conditionCodes(iCond,2)';
   end
-  catLabel                = [strrep(categories{1},'_',' '), ' = ', strjoin(coloredText(catValues{1}, catColor), ' | ')];
+  
+  catLabel                = parseVariableSpecifications(experiment.desc.(categories{1}), catValues{1});
+  catLabel                = [strrep(categories{1},'_',' '), ' = ', strjoin(coloredText(catLabel, catColor), ' | ')];
   
   [pan,shape,fig]         = makePanels( [prod(nSubCat),numel(eventName)], experiment.id, [strrep(experiment.id,'_',' ') ' : ' catLabel]       ...
-                                      , 'aspectratio', 1, 'plotmargins', struct('b',30), 'panelmargins', struct('b',15,'t',20), 'maxsubplotsize', 180 );
+                                      , 'aspectratio', 1, 'plotmargins', struct('b',25), 'panelmargins', struct('b',15,'t',20), 'maxsubplotsize', 180 );
   
   %% Compare each regressor across trial categories
   for iReg = 1:numel(eventName)
@@ -280,8 +276,13 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
         continue
       end
       
+      %% Category label
       specs               = model(iModel).specializations(true);
-      catLabel            = strcat(categories(2:end), '=', cellfun(@(x) specs.(x), categories(2:end), 'UniformOutput', false));
+      catLabel            = cellfun(@(x) specs.(x), categories(2:end), 'UniformOutput', false);
+      catLabel            = cellfun(@(x,y) parseVariableSpecifications(experiment.desc.(x),y,true), categories(2:end), catLabel, 'UniformOutput', false);
+      sel                 = cellfun(@iscell, catLabel);
+      catLabel(sel)       = cellfun(@(x) ['[' strjoin(x,';') ']'], catLabel(sel), 'UniformOutput', false);
+      catLabel            = strcat(categories(2:end), '=', catLabel);
       catLabel            = strjoin(formatSpecs(catLabel, conditionCodes), ', ');
 
       %% Axes formatting
@@ -289,7 +290,8 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
       hold(axs, 'on');
       axis(axs, 'tight');
       title(axs, catLabel, 'fontweight', 'normal');
-      xlabel(axs, sprintf('t from %s (%s)', strrep(eventName{iReg},'_',' '), experiment.unitOfTime));
+%       xlabel(axs, sprintf('t from %s (%s)', strrep(eventName{iReg},'_',' '), experiment.unitOfTime));
+      xlabel(axs, sprintf('t from %s', strrep(eventName{iReg},'_',' ')));
       ylabel(axs, sprintf('# spikes / %.3g%s', experiment.binSize, experiment.unitOfTime));
 
       %% Plot reference unspecialized model regressors
@@ -308,7 +310,7 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
         end
         
         response          = exp(model(iModel).regressors.bias + regressor.response);
-        yRange(iReg,iCat) = max(response);
+        yRange(iReg,iCat) = max([yRange(iReg,iCat); response]);
         line( 'parent', axs, 'xdata', regressor.time, 'ydata', response   ...
             , 'color', catColor(catIndex{1}(iModel),:), 'linewidth', 1+selModel, 'linestyle', lineStyle{selModel+1} );
       end
@@ -342,7 +344,7 @@ function fig = plotFitHierarchy(model, description, cfg)
   
   %% UGLY : condense category labels
   experiment              = model{1}(1).design.dspec.expt;
-  conditionCodes          = parseSpecs(experiment.desc.condition_code);
+  conditionCodes          = parseVariableSpecifications(experiment.desc.condition_code);
   modelSpecs              = formatSpecs(modelSpecs, conditionCodes, true);
   
   %% Configure plots
@@ -454,7 +456,7 @@ function showCellsInHierarchy(hObject, event, hGraph, hSelect, varargin)
   
   %% Don't remake the plot if it already exists
   hFig                  = modelGraph.Nodes{iClosest, 'Plot'}{:};
-  if ~isempty(hFig) && all(ishghandle(hFig))
+  if ~isempty(hFig) && all(ishghandle(hFig(:)))
     for iModel = 1:numel(models)
       figure(hFig(iModel));
     end
@@ -467,7 +469,7 @@ function showCellsInHierarchy(hObject, event, hGraph, hSelect, varargin)
     
     hFig                = gobjects(numel(models),2);
     for iModel = 1:numel(models)
-      hFig(iModel,1)    = plotPredictionByCondition(models{iModel}, varargin{:});
+%       hFig(iModel,1)    = plotPredictionByCondition(models{iModel}, varargin{:});
       hFig(iModel,2)    = plotRegressorsByCondition(models{iModel}, varargin{:});
       drawnow;
     end

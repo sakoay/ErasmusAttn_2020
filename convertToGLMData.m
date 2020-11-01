@@ -33,8 +33,9 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
   
   % Task conditions
   experiment          = buildGLM.registerValue(experiment, 'trial_nr', 'Index of trial by temporal order in experiment');
-  experiment          = buildGLM.registerValue(experiment, 'condition_code', '0 = abort trial, 1 = error trial, 2 = correct trial, 3 = omit reward, 4 = random reward');
-  experiment          = buildGLM.registerValue(experiment, 'direction_C', '1 = right, 3 = down, 5 = left, 7 = top');
+  experiment          = buildGLM.registerValue(experiment, 'condition_code', '0 = aborted trial, 1 = error trial, 2 = correct trial, 3 = omitted reward, 4 = random reward');
+  experiment          = buildGLM.registerValue(experiment, 'past_condition', '0 = aborted trial, 1 = error trial, 2 = correct trial, 3 = omitted reward, 4 = random reward, -1 = n/a');
+  experiment          = buildGLM.registerValue(experiment, 'C_location', '1 = right, 3 = down, 5 = left, 7 = top');
   experiment          = buildGLM.registerValue(experiment, 'gap_direction', 'Orientation of the gap in the C');
   experiment          = buildGLM.registerValue(experiment, 'reward_duration', 'Amount of juice received');
   experiment          = buildGLM.registerValue(experiment, 'saccade_amplitude', 'Degrees of deflection in detected saccade');
@@ -56,12 +57,21 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
 
   %% Loop over and register trials for each cell
   cellTrials          = cell(size(data));
-  parfor iCell = 1:numel(data)
-    cellTrials{iCell} = mstruct(size(data(iCell).trials), [{'duration'}; fieldnames(experiment.type)]);
+  for iCell = 1:numel(data)
+    %% UGLY : rename some fields to reduce confusion about definition
+    data(iCell).trials= renamefield(data(iCell).trials, 'direction_C', 'C_location');
     
+    %% Convert trial data to GLM format
+    cellTrials{iCell} = mstruct(size(data(iCell).trials), [{'duration'}; fieldnames(experiment.type)]);
     for iTrial = 1:numel(data(iCell).trials)
       %% Define source data and any extra computed fields here
       source          = data(iCell).trials(iTrial);
+      
+      if iTrial > 1 && data(iCell).trials(iTrial-1).trial_nr == source.trial_nr - 1
+        source.past_condition = data(iCell).trials(iTrial-1).condition_code;
+      else
+        source.past_condition = -1;
+      end
       source.delay_start      = source.c_stop + 100;
       if isempty(source.saccade_landmarks)
         source.saccade_onset  = nan;
@@ -80,8 +90,14 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
       startRelReward  = double(source.timestamp_el_reward) - double(source.ephys_start);
       % Start of Ephys recording according to the behavioral clock 
       ephysStart      = double(source.reward_start) - double(startRelReward);
-      % End of Ephys recording according to the behavioral clock 
-      ephysStop       = ephysStart + double(source.triallength) - 1;
+      
+      %% FIXME : try to deduce total trial length from consecutive trials
+      if iTrial < numel(data(iCell).trials) && data(iCell).trials(iTrial+1).trial_nr == source.trial_nr + 1
+        ephysStop     = ephysStart + double(data(iCell).trials(iTrial+1).ephys_start - source.ephys_start) - 1;
+      else
+        % End of Ephys recording according to the behavioral clock 
+        ephysStop     = ephysStart + double(source.triallength) - 1;
+      end
       
       %% Apply truncation window to 1ms sampled behavioral data 
       trialDuration   = ephysStop - ephysStart + 1;

@@ -42,6 +42,7 @@ classdef CategorizedModel < handle
       if ~isempty(design.X)
         isConst                             = full(all(design.X(1,:) == design.X(2:end,:), 1));
         design.constCols(~design.constCols) = isConst;
+        design.X(:,isConst)                 = [];
       end
     end
     
