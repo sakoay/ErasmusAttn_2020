@@ -10,15 +10,17 @@ function decodeTrialOutcome(dataFile, postfix)
   
   % Cross validation and permutation tests
   cfg.nCVFolds        = 5;
+  cfg.nShuffles       = 100;
   
   % Trial selection criteria
-  cfg.maxCueStart     = 300;            % maximum allowed interval from fixation on to cue presentation, in ms
+  cfg.maxCueStart     = 1000;            % maximum allowed interval from fixation on to cue presentation, in ms
   cfg.selectConditions= 1:2;            % keep only trials with these condition_code
 %   cfg.selectPastCond  = 1:2;            % keep only trials with these past_condition
   cfg.minNumTrials    = 20;             % minimum number of trials for fitting models
   
   % Configuration for fitcsvm()
-  cfg.fitOptions      = {'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds};
+  cfg.timeBin         = 100;            % time binning in ms
+  cfg.fitOptions      = {'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds, 'Standardize', true};
   
   %% Load data
   if isstruct(dataFile)
@@ -29,11 +31,12 @@ function decodeTrialOutcome(dataFile, postfix)
   
   %% Define output file
   [path,name,ext]     = parsePath(dataFile);
-  name                = sprintf('outcomeDecode_%s_min%dtrials', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials);
+  name                = sprintf('decoding_%s_%dms_min%dtrials', regexprep(regexprep(name,'^[^_]+_',''),'_[0-9]+ms',''), cfg.timeBin, cfg.minNumTrials);
   outputFile          = fullfile(path, [name postfix ext]);
   
   %% Specify behavioral timings to which the neural data is aligned
   cfg.behavEvents     = rowvec(fieldswithvalue(data.experiment.type, 'timing'));
+%   cfg.behavEvents     = setdiff(cfg.behavEvents, {'saccade_onset'});      % remove timings that can have NaNs in particular trials
   
   %% Specify experimental variables that are included in the model
   cfg.behavCategories = rowvec(fieldswithvalue(data.experiment.type, 'value'));
@@ -54,23 +57,30 @@ function decodeTrialOutcome(dataFile, postfix)
   
   
   %% Fit decoding models per cell
+  fprintf('Decoding behavioral outcomes from neural activity:\n');
   decoder             = cell(size(data.cellData));
   for iCell = 1:numel(data.cellData)
     %% Apply trial selection to cell data
-    selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                      ...
-                      & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)    ...
+    selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                              ...
+                      & [data.cellData(iCell).trials.duration] > [data.cellData(iCell).trials.reward_start] + 2*cfg.timeBin   ...
+                      & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)            ...
+                      & all(accumfun(1, @(x) isfinite([data.cellData(iCell).trials.(x)]), cfg.behavEvents), 1)  ...
                       ;
 %                       & ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond)      ...
     experiment        = data.experiment;
     experiment.id     = [data.cellData(iCell).monkey '_' data.cellData(iCell).cell_id];
     experiment.trial  = data.cellData(iCell).trials(selTrials);
-%     mean(selTrials)
+    experiment.selectedTrials = selTrials;
     
     if numel(experiment.trial) < cfg.minNumTrials
       decoder{iCell}  = experiment;
       continue;
     end
     
+    tStart            = tic;
+    fprintf('  [%3d]  %-20s (%3d/%-4d = %.3g%% trials)', iCell, experiment.id, sum(selTrials), numel(selTrials), 100*mean(selTrials));
+    drawnow;
+
     %% Define behavioral variables to decode from neural activity
     trialCategory     = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavCategories);
     trialCondition    = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavConditions);
@@ -84,25 +94,23 @@ function decodeTrialOutcome(dataFile, postfix)
       continue;
     end
     
-    catWeight         = nInCategory / sum(nInCategory);
+    catWeight         = 1 ./ nInCategory;
     trialWeight       = catWeight(catIndex);
+    trialWeight       = trialWeight(:) / sum(trialWeight);
     
     %% Compute binned firing rates aligned to all specified behavioral event times
-    selTrials         = cell(size(cfg.behavEvents));
     alignedActivity   = cell(size(cfg.behavEvents));
     alignedTime       = cell(size(cfg.behavEvents));
     for iEvent = 1:numel(cfg.behavEvents)
-      %% Include only those trials with valid event times of this type
-      selTrials{iEvent} = arrayfun(@(x) isfinite(x.(cfg.behavEvents{iEvent})), experiment.trial);
-      trials          = experiment.trial(selTrials{iEvent});
+      trials          = experiment.trial;
       
       %% Determine bin index for spikes aligned to a particular event time
-      rateBins        = arrayfun(@(x) floor((x.SS - x.(cfg.behavEvents{iEvent})) / experiment.binSize), trials, 'UniformOutput', false);
+      rateBins        = arrayfun(@(x) floor((x.SS - x.(cfg.behavEvents{iEvent})) / cfg.timeBin), trials, 'UniformOutput', false);
       minMaxBin       = extrema(cat(1,rateBins{:}));
       binOffset       = 1 - minMaxBin(1);
       
       %% Sum the number of spikes that fall within each time bin, per trial
-      alignedTime{iEvent}     = (minMaxBin(1):minMaxBin(2)) * experiment.binSize;
+      alignedTime{iEvent}     = (minMaxBin(1):minMaxBin(2)) * cfg.timeBin;
       nTimeBins               = numel(alignedTime{iEvent});
       alignedActivity{iEvent} = nan(numel(rateBins), nTimeBins);
       for iTrial = 1:numel(rateBins)
@@ -110,41 +118,60 @@ function decodeTrialOutcome(dataFile, postfix)
       end
       
       %% Truncate time bins that don't have data across all trials
-      trialStart      = arrayfun(@(x) floor(-x.(cfg.behavEvents{iEvent})                 / experiment.binSize), trials);
-      trialStop       = arrayfun(@(x) floor((x.duration-1 - x.(cfg.behavEvents{iEvent})) / experiment.binSize), trials);
+      trialStart      = arrayfun(@(x) floor(-x.(cfg.behavEvents{iEvent})                 / cfg.timeBin), trials);
+      trialStop       = arrayfun(@(x) floor((x.duration-1 - x.(cfg.behavEvents{iEvent})) / cfg.timeBin), trials);
       trialRange      = binOffset + (max(trialStart):min(trialStop));
       alignedActivity{iEvent} = alignedActivity{iEvent}(:,trialRange);
       alignedTime{iEvent}     = alignedTime{iEvent}(trialRange);
 %       figure; imagesc(alignedActivity{iEvent})
     end
+
+    %% Define permutation experiments
+    shuffleExp        = permutationExperiments(numel(experiment.trial), cfg.nShuffles, [], []);
+    decoder{iCell}    = struct('experiment', experiment, 'shuffleExp', shuffleExp);
     
     %% Fit decoder separately per condition type 
     for iCond = 1:numel(cfg.behavConditions)
       behaviorY       = trialCondition(:,iCond);
       
       %% Fit decoder for neural data aligned to different behavioral events
-      tic
       svModel         = cell(1, numel(cfg.behavEvents));
       parfor iEvent = 1:numel(cfg.behavEvents)
-        %% Apply event-specific trial selection
-        behavY        = behaviorY(selTrials{iEvent});
-        trialW        = trialWeight(selTrials{iEvent});
-        
         %% Fit decoder per time bin
         nTimeBins     = size(alignedActivity{iEvent}, 2);
-        fit           = cell(nTimeBins, 1);
-        for iTime = 1:nTimeBins
-          fit{iTime}  = fitcsvm(alignedActivity{iEvent}(:,iTime), behavY, cfg.fitOptions{:}, 'Weights', trialW);
+        model         = struct('prediction', nan([size(alignedActivity{iEvent}), size(shuffleExp,2)]));
+        for iExp = 1:size(shuffleExp,2)
+          sel         = shuffleExp(:,iExp);
+          for iTime = 1:nTimeBins
+            fitInfo   = fitcsvm(alignedActivity{iEvent}(sel,iTime), behaviorY, cfg.fitOptions{:}, 'Weights', trialWeight);
+            model.prediction(:,iTime,iExp)  = fitInfo.kfoldPredict();
+          end
         end
-        svModel{iEvent} = fit;
+        
+        %% Define classification accuracy using weighted trials (kfoldLoss() does not seem to account for this)
+        model.accuracy= sqsum(trialWeight .* (model.prediction == behaviorY), 1);
+        model.prediction(:,:,2:end) = [];       % reduce data storage
+        svModel{iEvent} = model;
       end
-      toc
+      svModel         = [svModel{:}];
+      
+      %% Collect fit information
+      [svModel.alignment]       = cfg.behavEvents{:};
+      [svModel.alignedTime]     = alignedTime{:};
+      [svModel.alignedActivity] = alignedActivity{:};
+      condDecode      = struct('target', behaviorY, 'model', svModel);
+      decoder{iCell}.(cfg.behavConditions{iCond}) = condDecode;
     end
+    
+    %% Progressive save 
+%     for ii=1:numel(condDecode.model); mm=condDecode.model(ii); figure; bandplot(mm.alignedTime,mm.accuracy(:,2:end)); hold on; plot(mm.alignedTime,mm.accuracy(:,1),'k'); xlabel(mm.alignment); end; tilefigs
+    
+    save(outputFile, 'decoder', 'cfg');
+    fprintf(' ... %gs\n', toc(tStart));
   end
   
   
   %% Save models
-  save(outputFile, 'unspecializedModel', 'categoryModel', 'hierarchicalModel', 'cfg');
   fprintf(' -->  %s\n', outputFile);
   
 end
