@@ -46,12 +46,12 @@ end
 function fig = plotCellData(data, experiment)
   
   %% Specify categories of trials for which to plot data together
-  trialConfig             = [cat(1,data.trials.direction_C), cat(1,data.trials.gap_direction)];
+  trialConfig             = [cat(1,data.trials.C_location), cat(1,data.trials.gap_direction)];
   [config,~,configIndex]  = unique(trialConfig, 'rows');
   [condition,~,condIndex] = unique([data.trials.condition_code]);
   
   %% Labels for trial categories
-  CdirLabel               = parseSpecs(experiment.desc.direction_C   , config(:,1));
+  CdirLabel               = parseSpecs(experiment.desc.C_location   , config(:,1));
   condLabel               = parseSpecs(experiment.desc.condition_code, condition);
   
   %% Configure plots
