@@ -1,8 +1,11 @@
-function decodeTrialOutcome(dataFile, postfix)
+function decodeTrialOutcome(dataFile, postfix, lazy)
 
   %% Default arguments
   if ~exist('postfix', 'var') || isempty(postfix)
     postfix           = '';
+  end
+  if ~exist('lazy', 'var') || isempty(lazy)
+    lazy              = true;
   end
 
   %% Analysis configuration
@@ -11,6 +14,7 @@ function decodeTrialOutcome(dataFile, postfix)
   % Cross validation and permutation tests
   cfg.nCVFolds        = 5;
   cfg.nShuffles       = 100;
+%   cfg.nShuffles       = 50;
   
   % Trial selection criteria
   cfg.maxCueStart     = 1000;            % maximum allowed interval from fixation on to cue presentation, in ms
@@ -18,9 +22,12 @@ function decodeTrialOutcome(dataFile, postfix)
 %   cfg.selectPastCond  = 1:2;            % keep only trials with these past_condition
   cfg.minNumTrials    = 20;             % minimum number of trials for fitting models
   
-  % Configuration for fitcsvm()
-  cfg.timeBin         = 100;            % time binning in ms
-  cfg.fitOptions      = {'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds, 'Standardize', true};
+  % Configuration for model fitting
+  cfg.timeBin         = 150;            % time binning in ms
+  cfg.codingDesign    = 'onevsone';
+  cfg.fitFcn          = { @(X,y,varargin) fitcsvm(X,y, 'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds, 'Standardize', true, varargin{:})                                                       ...
+                        , @(X,y,varargin) fitcecoc(X,y, 'Coding', cfg.codingDesign, 'Learners', templateSVM('Standardize',true), 'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds, varargin{:})  ...
+                        };
   
   %% Load data
   if isstruct(dataFile)
@@ -31,40 +38,53 @@ function decodeTrialOutcome(dataFile, postfix)
   
   %% Define output file
   [path,name,ext]     = parsePath(dataFile);
-  name                = sprintf('decoding_%s_%dms_min%dtrials', regexprep(regexprep(name,'^[^_]+_',''),'_[0-9]+ms',''), cfg.timeBin, cfg.minNumTrials);
+  name                = sprintf('decoding_%s_%dms_%dshuffle', regexprep(regexprep(name,'^[^_]+_',''),'_[0-9]+ms',''), cfg.timeBin, cfg.nShuffles);
   outputFile          = fullfile(path, [name postfix ext]);
   
   %% Specify behavioral timings to which the neural data is aligned
   cfg.behavEvents     = rowvec(fieldswithvalue(data.experiment.type, 'timing'));
 %   cfg.behavEvents     = setdiff(cfg.behavEvents, {'saccade_onset'});      % remove timings that can have NaNs in particular trials
-  
+
+  cfg.behavEvents(~cellfun(@isempty, regexp(cfg.behavEvents, '_stop$', 'once')))  = [];
+
   %% Specify experimental variables that are included in the model
   cfg.behavCategories = rowvec(fieldswithvalue(data.experiment.type, 'value'));
   cfg.behavCategories = setdiff(cfg.behavCategories, {'trial_nr', 'reward_duration', 'saccade_amplitude', 'past_condition'});
-  sel                 = contains(cfg.behavCategories, 'condition');
-  cfg.behavConditions = cfg.behavCategories(sel);
-  cfg.behavCategories(sel)  = [];
   
   %% UGLY : use the entire dataset to determine legal combinations of cfg.behavCategories
-  trialCategory       = accumfun(1, @(y) accumfun(2, @(x) cat(1,y.trials.(x)), [cfg.behavCategories,cfg.behavConditions]), data.cellData);
+  trialCategory       = accumfun(1, @(y) accumfun(2, @(x) cat(1,y.trials.(x)), cfg.behavCategories), data.cellData);
   exptCategories      = unique(trialCategory, 'rows');
   
   % Apply the specified behavior-level selections 
-  [~,iCond]           = ismember(cfg.behavConditions, 'condition_code');
-  if ~isempty(iCond)
-    exptCategories(~ismember(exptCategories(:,numel(cfg.behavCategories) + iCond), cfg.selectConditions), :)  = [];
+  [~,iCond]           = ismember('condition_code', cfg.behavCategories);
+  exptCategories(~ismember(exptCategories(:,iCond), cfg.selectConditions), :) = [];
+  
+  nClasses            = arrayfun(@(x) numel(unique(exptCategories(:,x))), 1:numel(cfg.behavCategories));
+  
+  %% Support resuming of previously saved fits
+  if lazy && exist(outputFile, 'file')
+    newCfg            = cfg;
+    load(outputFile);
+    if ~isequal(rmfield(newCfg,'fitFcn'), rmfield(keepfield(cfg,fieldnames(newCfg)),'fitFcn'))
+      error('decodeTrialOutcome:cfg', 'Inconsistent analysis configuration found in old model file %s', outputFile);
+    end
+  else
+    decoder           = cell(size(data.cellData));
   end
   
-  
+
   %% Fit decoding models per cell
   fprintf('Decoding behavioral outcomes from neural activity:\n');
-  decoder             = cell(size(data.cellData));
-  for iCell = 1:numel(data.cellData)
+  for iCell = 6:numel(data.cellData)
+    if ~isempty(decoder{iCell})
+      continue
+    end
+    
     %% Apply trial selection to cell data
-    selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                              ...
-                      & [data.cellData(iCell).trials.duration] > [data.cellData(iCell).trials.reward_start] + 2*cfg.timeBin   ...
-                      & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)            ...
-                      & all(accumfun(1, @(x) isfinite([data.cellData(iCell).trials.(x)]), cfg.behavEvents), 1)  ...
+    selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                                  ...
+                      & [data.cellData(iCell).trials.duration] > [data.cellData(iCell).trials.reward_start] + 200   ... % HACK for incorrect trial durations
+                      & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)                ...
+                      & all(accumfun(1, @(x) isfinite([data.cellData(iCell).trials.(x)]), cfg.behavEvents), 1)      ...
                       ;
 %                       & ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond)      ...
     experiment        = data.experiment;
@@ -83,10 +103,9 @@ function decodeTrialOutcome(dataFile, postfix)
 
     %% Define behavioral variables to decode from neural activity
     trialCategory     = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavCategories);
-    trialCondition    = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavConditions);
 
     %% Weigh trials so that every category has equal weight, which means that the weighted covariance matrix is the identity matrix
-    [~,catIndex]      = ismember([trialCategory, trialCondition], exptCategories, 'rows');
+    [~,catIndex]      = ismember(trialCategory, exptCategories, 'rows');
     nInCategory       = arrayfun(@(x) sum(catIndex==x), 1:size(exptCategories,1));
     if any(nInCategory < 1)
       warning('decodeTrialOutcome:reweight', 'Insufficient trials to have data in each experimental category for cell %s, skipping this cell.', experiment.id);
@@ -105,8 +124,8 @@ function decodeTrialOutcome(dataFile, postfix)
       trials          = experiment.trial;
       
       %% Determine bin index for spikes aligned to a particular event time
-      rateBins        = arrayfun(@(x) floor((x.SS - x.(cfg.behavEvents{iEvent})) / cfg.timeBin), trials, 'UniformOutput', false);
-      minMaxBin       = extrema(cat(1,rateBins{:}));
+      rateBins        = arrayfun(@(x) colvec(floor((x.SS - x.(cfg.behavEvents{iEvent})) / cfg.timeBin)), trials, 'UniformOutput', false);
+      minMaxBin       = extrema(cat(1, rateBins{:}));
       binOffset       = 1 - minMaxBin(1);
       
       %% Sum the number of spikes that fall within each time bin, per trial
@@ -128,30 +147,38 @@ function decodeTrialOutcome(dataFile, postfix)
 
     %% Define permutation experiments
     shuffleExp        = permutationExperiments(numel(experiment.trial), cfg.nShuffles, [], []);
-    decoder{iCell}    = struct('experiment', experiment, 'shuffleExp', shuffleExp);
+    decoder{iCell}    = struct('experiment', experiment, 'exptCategories', exptCategories, 'shuffleExp', shuffleExp);
     
     %% Fit decoder separately per condition type 
-    for iCond = 1:numel(cfg.behavConditions)
-      behaviorY       = trialCondition(:,iCond);
+    for iCond = 1:numel(cfg.behavCategories)
+      behaviorY       = trialCategory(:,iCond);
+      optimizer       = cfg.fitFcn{1 + (nClasses(iCond) > 2)};
       
       %% Fit decoder for neural data aligned to different behavioral events
       svModel         = cell(1, numel(cfg.behavEvents));
       parfor iEvent = 1:numel(cfg.behavEvents)
+        neuralX       = alignedActivity{iEvent};
+        
         %% Fit decoder per time bin
-        nTimeBins     = size(alignedActivity{iEvent}, 2);
-        model         = struct('prediction', nan([size(alignedActivity{iEvent}), size(shuffleExp,2)]));
+        nTimeBins     = size(neuralX, 2);
+        prediction    = nan([size(neuralX), size(shuffleExp,2)]);
         for iExp = 1:size(shuffleExp,2)
-          sel         = shuffleExp(:,iExp);
+          X           = neuralX(shuffleExp(:,iExp),:);
           for iTime = 1:nTimeBins
-            fitInfo   = fitcsvm(alignedActivity{iEvent}(sel,iTime), behaviorY, cfg.fitOptions{:}, 'Weights', trialWeight);
-            model.prediction(:,iTime,iExp)  = fitInfo.kfoldPredict();
+            fitInfo   = optimizer(X(:,iTime), behaviorY, 'Weights', trialWeight);
+            prediction(:,iTime,iExp)  = fitInfo.kfoldPredict();
           end
         end
         
         %% Define classification accuracy using weighted trials (kfoldLoss() does not seem to account for this)
+        model         = struct('prediction', prediction);
         model.accuracy= sqsum(trialWeight .* (model.prediction == behaviorY), 1);
         model.prediction(:,:,2:end) = [];       % reduce data storage
         svModel{iEvent} = model;
+        
+%         pp=mean(model.accuracy >= model.accuracy(:,1), 2); figure; plot(pp); hold on; plot(find(pp<=0.05),pp(pp<=0.05),'o'); title(cfg.codingDesign);
+%         figure; bandplot(model.accuracy(:,2:end)); hold on; plot(model.accuracy(:,1)); title(cfg.codingDesign);
+%         figure; confusionchart(behaviorY,prediction(:,6,1)); title(cfg.codingDesign);
       end
       svModel         = [svModel{:}];
       
@@ -160,11 +187,11 @@ function decodeTrialOutcome(dataFile, postfix)
       [svModel.alignedTime]     = alignedTime{:};
       [svModel.alignedActivity] = alignedActivity{:};
       condDecode      = struct('target', behaviorY, 'model', svModel);
-      decoder{iCell}.(cfg.behavConditions{iCond}) = condDecode;
+      decoder{iCell}.(cfg.behavCategories{iCond}) = condDecode;
     end
     
     %% Progressive save 
-%     for ii=1:numel(condDecode.model); mm=condDecode.model(ii); figure; bandplot(mm.alignedTime,mm.accuracy(:,2:end)); hold on; plot(mm.alignedTime,mm.accuracy(:,1),'k'); xlabel(mm.alignment); end; tilefigs
+%     for ii=1:numel(condDecode.model); mm=condDecode.model(ii); figure; bandplot(mm.alignedTime,mm.accuracy(:,2:end)); hold on; plot(mm.alignedTime,mm.accuracy(:,1),'k'); xlabel(strrep(mm.alignment,'_',' ')); end; tilefigs
     
     save(outputFile, 'decoder', 'cfg');
     fprintf(' ... %gs\n', toc(tStart));
@@ -172,6 +199,7 @@ function decodeTrialOutcome(dataFile, postfix)
   
   
   %% Save models
+  save(outputFile, 'decoder', 'cfg');
   fprintf(' -->  %s\n', outputFile);
   
 end
