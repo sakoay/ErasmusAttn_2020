@@ -250,7 +250,12 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
   categories              = fieldnames(modelSpecs);
   [catValues,~,catIndex]  = cellfun(@(x) unique({modelSpecs.(x)}), categories, 'UniformOutput', false);
   nSubCat                 = cellfun(@numel, catValues(2:end));
-  subCatIndex             = sub2ind([nSubCat; 1], catIndex{2:end});
+  if isempty(nSubCat)
+    nSubCat               = 1;
+    subCatIndex           = ones(size(model));
+  else
+    subCatIndex           = sub2ind([nSubCat; 1], catIndex{2:end});
+  end
   
   yRange(:,2:prod(nSubCat)) = 0;
   

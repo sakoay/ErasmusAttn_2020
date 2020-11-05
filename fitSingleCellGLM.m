@@ -1,8 +1,8 @@
-function fitSingleCellGLM(dataFile, postfix, lazy)
+function fitSingleCellGLM(dataFile, perTrialScale, lazy)
 
   %% Default arguments
-  if ~exist('postfix', 'var') || isempty(postfix)
-    postfix           = '';
+  if ~exist('perTrialScale', 'var') || isempty(perTrialScale)
+    perTrialScale     = true;
   end
   if ~exist('lazy', 'var') || isempty(lazy)
     lazy              = true;
@@ -45,7 +45,10 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
   if ~isempty(cfg.fitOptions)
     name              = [name '_' strjoin(strcat(cfg.fitOptions(:,1), regexprep(cellfun(@num2str,cfg.fitOptions(:,2),'UniformOutput',false),'[^0-9]','')), '_')];
   end
-  outputFile          = fullfile(path, [name postfix ext]);
+  if perTrialScale
+    name              = [name '_perTrialScale'];
+  end
+  outputFile          = fullfile(path, [name ext]);
   
   %% Specify experimental variables that are included in the model
   cfg.behavEvents     = rowvec(fieldswithvalue(data.experiment.type, 'timing'));
@@ -116,13 +119,19 @@ function fitSingleCellGLM(dataFile, postfix, lazy)
     [design,trialBin] = buildGLM.compileSparseDesignMatrix(modelSpecs, 1:numel(experiment.trial));
     design.dspec.expt.numTimeBins = size(design.X,1);
     design.dspec.expt.trialBins   = trialBin;
-    firingRate        = full(buildGLM.getBinnedSpikeTrain(experiment, 'SS', design.trialIndices));
+ 
+    %% Optional scaling of regressors for each trial by the average firing rate in that trial
+    if perTrialScale
+      meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);
+      design.X        = bsxfun(@times, design.X, meanRate(design.trialX));
+    end
     
-    %% Fit model with no specialization of regressors by behavior categories
+    %% Store model specifications and data for this cell
+    firingRate        = full(buildGLM.getBinnedSpikeTrain(experiment, 'SS', design.trialIndices));
     unspecializedModel{iCell}     = CategorizedModel(firingRate, design);
   end
   
-  %% Fit unspecialized model per cell
+  %% Fit model with no specialization of regressors by behavior categories
   fprintf('Fitting unspecialized models for %d/%d cells...\n', sum(cellfun(@(x) ~isstruct(x) && isempty(x.prediction), unspecializedModel)), numel(data.cellData));
   parfor iCell = 1:numel(unspecializedModel)
     if ~isstruct(unspecializedModel{iCell}) && isempty(unspecializedModel{iCell}.prediction)
