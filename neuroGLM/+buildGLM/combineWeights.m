@@ -10,6 +10,7 @@ function [wout] = combineWeights(dm, w)
 %   wout.(label).response = combined weights
 %   wout.(label).time = time axis
 
+wout = struct();    %% SAK : prevent overwriting
 dspec = dm.dspec;
 binSize = dspec.expt.binSize;
 
@@ -24,7 +25,14 @@ end
 
 if isfield(dm, 'constCols') % put back the constant columns
     w2 = zeros(dm.dspec.edim, 1);
-    w2(~dm.constCols) = w; % first term is bias
+    
+    %% SAK : have to properly omit bias column
+    constCols = dm.constCols;
+    if isfield(dm, 'biasCol')
+      constCols(dm.biasCol) = [];
+    end
+    
+    w2(~constCols) = w; % first term is bias
     w = w2;
 end
 
@@ -34,7 +42,6 @@ if numel(w) ~= dm.dspec.edim
 end
 
 startIdx = [1 (cumsum([dspec.covar(:).edim]) + 1)];
-wout = struct();
 
 for kCov = 1:numel(dspec.covar)
     covar = dspec.covar(kCov);

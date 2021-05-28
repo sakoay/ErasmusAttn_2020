@@ -262,11 +262,10 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
   %% Configure plots
   lineStyle               = {'-.', '-'};
   catColor                = lines(numel(catValues{1}));
-  if strcmp(categories{1}, 'condition_code')
-    [~,iCond]             = ismember(catValues{1}, conditionCodes(:,1));
-    catValues{1}          = conditionCodes(iCond,2)';
-  end
-  
+%   if strcmp(categories{1}, 'condition_code')
+%     [~,iCond]             = ismember(catValues{1}, conditionCodes(:,1));
+%     catValues{1}          = conditionCodes(iCond,2)';
+%   end
   catLabel                = parseVariableSpecifications(experiment.desc.(categories{1}), catValues{1});
   catLabel                = [strrep(categories{1},'_',' '), ' = ', strjoin(coloredText(catLabel, catColor), ' | ')];
   

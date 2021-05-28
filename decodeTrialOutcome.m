@@ -1,8 +1,10 @@
-function decodeTrialOutcome(dataFile, normalizeRates, lazy)
+% ff = rdir('C:\Neuroscience\ErasmusAttn\glmExpt_*.mat');
+% for ii = 1:numel(ff); decodeTrialOutcome(ff(ii).name); end
+function decodeTrialOutcome(dataFile, baselineTrials, lazy)
 
   %% Default arguments
-  if ~exist('normalizeRates', 'var') || isempty(normalizeRates)
-    normalizeRates    = true;
+  if ~exist('baselineTrials', 'var')
+    baselineTrials    = 5;
   end
   if ~exist('lazy', 'var') || isempty(lazy)
     lazy              = true;
@@ -23,7 +25,8 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
   cfg.minNumTrials    = 10;             % minimum number of trials for fitting models
   
   % Configuration for model fitting
-  cfg.timeBin         = 150;            % time binning in ms
+%   cfg.timeBin         = 150;            % time binning in ms
+  cfg.timeBin         = 200;            % time binning in ms
   cfg.codingDesign    = 'onevsone';
   cfg.fitFcn          = { @(X,y,varargin) fitcsvm(X,y, 'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds, 'Standardize', true, varargin{:})                                                       ...
                         , @(X,y,varargin) fitcecoc(X,y, 'Coding', cfg.codingDesign, 'Learners', templateSVM('Standardize',true), 'Verbose', 0, 'Crossval', 'on', 'KFold', cfg.nCVFolds, varargin{:})  ...
@@ -39,8 +42,8 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
   %% Define output file
   [path,name,ext]     = parsePath(dataFile);
   name                = sprintf('decoding_%s_%dms_%dshuffle', regexprep(regexprep(name,'^[^_]+_',''),'_[0-9]+ms',''), cfg.timeBin, cfg.nShuffles);
-  if normalizeRates
-    name              = [name '_normFR'];
+  if ~isempty(baselineTrials)
+    name              = sprintf('%s_baseline%d', name, baselineTrials);
   end
   outputFile          = fullfile(path, [name ext]);
   
@@ -66,11 +69,11 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
   subConditions       = cell(size(cfg.behavCategories));
   for iCond = 1:numel(cfg.behavCategories)
     %% Get the set of possible values of this behavioral condition, and all possible categories of the other conditions
-    [condValues,~,condIndex]  = unique(exptCategories(:,iCond));
+    [condValues,~,condIdx]    = unique(exptCategories(:,iCond));
     [otherCat,~,otherIndex]   = unique(exptCategories(:,[1:iCond-1,iCond+1:end]), 'rows');
     
     %% Group condition values by common restrictions on the other categories
-    allowedCategories         = arrayfun(@(x) otherIndex(condIndex==x), 1:size(condValues,1), 'UniformOutput', false);
+    allowedCategories         = arrayfun(@(x) otherIndex(condIdx==x), 1:size(condValues,1), 'UniformOutput', false);
     [~,iOther,iValue]         = unique(cellfun(@(x) mat2str(sort(x)), allowedCategories, 'UniformOutput', false));
     subConditions{iCond}      = arrayfun(@(x) rowvec(condValues(iValue == x)), 1:numel(iOther), 'UniformOutput', false);
   end
@@ -119,11 +122,17 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
     %% Define behavioral variables to decode from neural activity
     trialCategory     = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavCategories);
 
-    %% Optionally normalize the firing rates of each trial to the average rate for that trial
-    if normalizeRates
-      activityNorm    = 1 ./ arrayfun(@(x) numel(x.SS), experiment.trial(:));
-    else
+    %% Optionally normalize the firing rates of each trial to the moving average rate 
+    if isempty(baselineTrials)
       activityNorm    = 1;
+    else
+      %%
+      trialMeanFR     = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial(:));
+      baselineFR      = movingAverage(trialMeanFR, baselineTrials, 1);
+      activityNorm    = 1 ./ baselineFR;
+%       longfigure; hold on; yyaxis left; plot(trialMeanFR); yyaxis right; plot(trialMeanFR ./ baselineFR); set(gca,'ylim',[0 2])
+%       baselineFR      = movingAverage(trialMeanFR, baselineTrials, 1, [], [], true);
+%       plot(trialMeanFR ./ baselineFR,'k-'); set(gca,'ylim',[0 2])
     end
     
     %% Compute binned firing rates aligned to all specified behavioral event times
@@ -164,9 +173,11 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
     for iCond = 1:numel(cfg.behavCategories)
       %% Restrict decoding to the subset of trials with a design that can be balanced across conditions
       condDecode      = repmat(struct('variable', cfg.behavCategories{iCond}), size(subConditions{iCond}));
-      for iSub = 1:numel(subConditions{iCond})
+      parfor iSub = 1:numel(subConditions{iCond})
         %% Discard trials if necessary in order to be able to balance trial conditions
         selTrials     = ismember(trialCategory(:,iCond), subConditions{iCond}{iSub});
+        condIndex     = [];
+        nInCategory   = [];
         for iDiscard = 0:1
           %% Determine all possible combinations of all task condition values for the target subset of trials 
           [otherCat,~,otherIndex] = unique(trialCategory(selTrials,[1:iCond-1, iCond+1:end]), 'rows');
@@ -182,7 +193,7 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
           if isempty(missingValues)
             break
           elseif iDiscard 
-            keyboard
+            error('decodeTrialOutcome:iDiscard', 'Not sure what to do.');
           else
             selTrials(selTrials)  = ~ismember(otherIndex, missingValues);
           end
@@ -204,6 +215,7 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
         condDecode(iSub).target           = behaviorY;
         
         if sum(selTrials) < cfg.minNumTrials
+          condDecode(iSub).model          = [];
           warning( 'decodeTrialOutcome:selTrials', 'Insufficient trials to have data in each category of %s = %s for cell %s.'  ...
                  , cfg.behavCategories{iCond}, mat2str(condDecode(iSub).values), experiment.id );
           continue;
@@ -213,12 +225,13 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
         shuffleExp    = permutationExperiments(numel(behaviorY), cfg.nShuffles, [], []);
         
         %% Fit decoder for neural data aligned to different behavioral events
-        try
-          
-        warning('error', 'stats:cvpartition:KFoldMissingGrp');
+%         try
+%           
+%         warning('error', 'stats:cvpartition:KFoldMissingGrp');
+        
         optimizer     = cfg.fitFcn{1 + (numel(condDecode(iSub).values) > 2)};
         svModel       = cell(1, numel(cfg.behavEvents));
-        parfor iEvent = 1:numel(cfg.behavEvents)
+        for iEvent = 1:numel(cfg.behavEvents)
           %% Fit decoder per time bin
           nTimeBins   = size(neuralX{iEvent}, 2);
           prediction  = nan([size(neuralX{iEvent}), size(shuffleExp,2)]);
@@ -243,9 +256,9 @@ function decodeTrialOutcome(dataFile, normalizeRates, lazy)
         svModel         = [svModel{:}];
 %         warning('on', 'stats:cvpartition:KFoldMissingGrp');
 
-        catch err
-          keyboard
-        end
+%         catch err
+%           keyboard
+%         end
 
         %% Collect fit information
         [svModel.alignment]           = cfg.behavEvents{:};

@@ -2,13 +2,6 @@
 classdef CategorizedModel < handle
   
   %_________________________________________________________________________________________________
-  properties (Constant)
-    REGINDEX          = 'IndexMinDeviance';
-%     REGINDEX          = 'Index1SE';
-    REGLAMBDA         = strrep(CategorizedModel.REGINDEX, 'Index', 'Lambda')
-  end
-  
-  %_________________________________________________________________________________________________
   properties (SetAccess = protected)
     ID                = []            % unique identifier for each model, not changed upon copying
     
@@ -133,6 +126,54 @@ classdef CategorizedModel < handle
       end
       aic           = neg2LnL + dof * (2 / size(target,1));
     end
+  
+    
+    %----- Optimize regularized log-likelihood for a series of regularization strengths 
+    function [modelW, fitInfo] = fitRegularizationPath(y, X, lambdas, options)
+      modelW                        = nan(size(X,2), numel(lambdas));
+      W0                            = zeros(size(X,2), 1);
+      fitInfo                       = struct('cost', nan(size(lambdas)), 'lambda', lambdas, 'iterations', nan(size(lambdas)));
+      for iLambda = numel(lambdas):-1:1
+        options.lambda              = lambdas(iLambda);
+        if nargout > 1
+          [modelW(:,iLambda),optim] = mexFistaFlat(y, X, W0, options);
+          fitInfo.cost(iLambda)     = optim(1,:);
+          fitInfo.iterations(iLambda) = optim(4,:);
+        else
+          modelW(:,iLambda)         = mexFistaFlat(y, X, W0, options);
+        end
+        
+        %% Warm start for next lambda in the list
+        W0                          = modelW(:,iLambda);
+      end
+    end
+
+    %----- Cross-validated (unpenalized) negative log-likelihood for a series of regularization strengths 
+    function [negLnL, modelW, prediction, lambdaMax] = xvalRegularizationPath(y, X, lambdaRatio, options, cvTrainSel)
+      %% Loop over cross-validation folds
+      modelW                        = nan(size(X,2), numel(lambdaRatio), size(cvTrainSel,2));
+      prediction                    = nan(numel(y), numel(lambdaRatio));
+      lambdaMax                     = nan(1, size(cvTrainSel,2));
+      for iCV = 1:size(cvTrainSel,2)
+        trainSel                    = cvTrainSel(:,iCV);
+        
+        %% Align regularization strengths across folds by adjusting to the per-fold guesstimated maximum
+        selData                     = trainSel & y > 0;
+        lambdaMax(iCV)              = max( X(selData,1:end-options.intercept)' * ( log(y(selData)) - X(selData,end-options.intercept+1:end) ) );
+        lambdas                     = lambdaRatio * lambdaMax(iCV);
+        
+        %% Train model on a subset of data
+        modelW(:,:,iCV)             = CategorizedModel.fitRegularizationPath(y(trainSel), X(trainSel,:), lambdas, options);
+
+        %% Evaluate model on left-out test data
+        testSel                     = ~trainSel;
+        prediction(testSel,:)       = exp(X(testSel,:) * modelW(:,:,iCV));
+      end
+      
+      %% Negative log-likelihood
+      negLnL                        = -CategorizedModel.poissonLogLikelihood(y, prediction);
+    end
+    
   end
     
   %_________________________________________________________________________________________________
@@ -271,9 +312,9 @@ classdef CategorizedModel < handle
       for iObj = 1:numel(obj)
         if isempty(obj(iObj).fitInfo)
         elseif isfield(obj(iObj).fitInfo, 'modelW')
-          dof(iObj) = sum(obj(iObj).fitInfo.modelW(:,obj(iObj).fitInfo.(CategorizedModel.REGINDEX)) ~= 0, 1);
+          dof(iObj) = sum(obj(iObj).fitInfo.modelW ~= 0, 1);
         else
-          dof(iObj) = sum(obj(iObj).fitInfo.activeSet(:,obj(iObj).fitInfo.(CategorizedModel.REGINDEX)), 1);
+          dof(iObj) = sum(obj(iObj).fitInfo.activeSet, 1);
         end
       end
     end
@@ -417,18 +458,18 @@ classdef CategorizedModel < handle
     end
     
     %----- Fit regression model
-    function obj = regress(obj, nCVFolds, nLambdas, lazy, varargin)
+    function obj = regress(obj, nCVFolds, fitOptions, lazy, nLambdas, minLambda)
       %% Default arguments
-      if ~exist('nLambdas', 'var') || isempty(nLambdas)
-        nLambdas                      = 10;
-      end
       if ~exist('lazy', 'var') || isempty(lazy)
         lazy                          = false;
       end
+      if ~exist('nLambdas', 'var') || isempty(nLambdas)
+        nLambdas                      = 10;
+      end
+      if ~exist('minLambda', 'var') || isempty(minLambda)
+        minLambda                     = 1e-4;
+      end
 
-      %% GLM configuration
-      fitOpts                         = [{'poisson', 'Link', 'log', 'MaxIter', 1e5}, varargin];
-      
       %% Fit model for each configuration of model specifications and data to explain
       cvTrainSel                      = cell(size(obj));
       fitInfo                         = cell(size(obj));
@@ -439,50 +480,46 @@ classdef CategorizedModel < handle
           continue;
         end
         
+        %% Generate lambda ratio sequence on a log scale 
+        lambdaRatio                   = exp(linspace(log(minLambda), log(1), nLambdas));
+
+        %% GLM configuration
+        options                       = fitOptions;
+        options.lambda                = lambdaRatio;
+        options.groups                = int32(accumfun(2, @(x) x*ones(1,obj(iObj).design.dspec.covar(x).edim), 1:numel(obj(iObj).design.dspec.covar)));
+        options.groups(end+1:size(obj(iObj).design.X,2))  = 0;
+        options.groups(obj(iObj).design.constCols)        = [];
+      
         %% Define cross-validation selection and shuffled data
         trialLength                   = SplitVec(obj(iObj).design.trialX, 'equal', 'length');
         [~,~,cvTrainSel{iObj}]        = permutationExperiments(trialLength, 0, 0, nCVFolds, 2);
         xvalPartitions                = cvpartition(numel(trialLength), 'KFold', nCVFolds);
-                                
-        designX                       = full(obj(iObj).design.X);
+        designX                       = obj(iObj).design.X;
         targetY                       = obj(iObj).target;
-%         fitglm(designX, targetY, 'linear', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true );
         
+%         fitglm(designX, targetY, 'linear', 'Distribution', 'poisson', 'Link', 'log', 'Intercept', true );
 %         fitInfo                   = linearSupportVectorMR( obj(iObj).target, obj(iObj).design.X, obj(iObj).cvTrainSel, obj(iObj).shuffleExp, bootstrapExp, [], [], [], true );
 
         %% Use cross-validation to determine regularization strength
-        xvalPartitions.Impl           = CustomCVPartition(cvTrainSel{iObj}(:,:,1));
-        [modelW{iObj},fitInfo{iObj}]  = lassoglm(designX, targetY, fitOpts{:}, 'NumLambda', nLambdas, 'CV', xvalPartitions);
+        fitInfo{iObj}.cv1NegLnL       = CategorizedModel.xvalRegularizationPath(targetY, designX, lambdaRatio, options, cvTrainSel{iObj}(:,:,1));
+        [~,bestIndex]                 = min(fitInfo{iObj}.cv1NegLnL);
 
-        lambdaRatio                   = fitInfo{iObj}.(CategorizedModel.REGLAMBDA) / fitInfo{iObj}.Lambda(end);
-%         fitInfo{iObj}.LambdaL1   = fitInfo{iObj}.Lambda .* fitInfo{iObj}.Alpha;
-%         fitInfo{iObj}.LambdaL2   = fitInfo{iObj}.Lambda .* (1 - fitInfo{iObj}.Alpha)/2;
+        %% Use all of data to obtain central value for model weights
+        % Guesstimate range of regularization strengths
+        selData                       = obj(iObj).target > 0;
+        lambdaMax                     = max( obj(iObj).design.X(selData,1:end-options.intercept)'                                           ...
+                                           * ( log(obj(iObj).target(selData)) - obj(iObj).design.X(selData,end-options.intercept+1:end) )   ...
+                                           );
+        [modelW{iObj},fitInfo{iObj}]  = CategorizedModel.fitRegularizationPath(targetY, designX, lambdaRatio(bestIndex) * lambdaMax, options);
+        fitInfo{iObj}.bestIndex       = bestIndex;
         
-%         lassoPlot(cvW,cvFitInfo,'plottype','CV');
+%         longfigure;   hold on;    plot(targetY);  plot(exp(designX * modelW{iObj}));    title(fitInfo{iObj}.cost)
+%         figure; plot(modelW{iObj}'); figure; plot(fitInfo{iObj}.cv1NegLnL);
 
         %% Use an independent set of cross-validation folds to evaluate goodness of fit
-        predict                       = nan(size(obj(iObj).target));
-        if lambdaRatio < 1
-          for iCV = 1:nCVFolds
-            %% Train model on a subset of data
-            trainSel                  = cvTrainSel{iObj}(:,iCV,2);
-            [cvW,cvInfo]              = lassoglm(designX(trainSel,:), targetY(trainSel), fitOpts{:}, 'NumLambda', 2, 'LambdaRatio', lambdaRatio);
-%             [cvW,cvInfo]              = lassoglm(designX(trainSel,:), targetY(trainSel), fitOpts{:}, 'Lambda', fitInfo{iObj}.(CategorizedModel.REGLAMBDA));
-
-            %% Evaluate model on left-out test data
-            testSel                   = ~trainSel;
-            predict(testSel)          = glmval([cvInfo.Intercept(1); cvW(:,1)], designX(testSel,:), 'log');
-          end
-        else
-          %% Constant model
-          for iCV = 1:nCVFolds
-            %% Train model on a subset of data
-            trainSel                  = cvTrainSel{iObj}(:,iCV,2);
-            %% Evaluate model on left-out test data
-            predict(~trainSel)        = mean(targetY(trainSel),1);
-          end
-        end
-        cvPrediction{iObj}            = predict;
+        [fitInfo{iObj}.cv2NegLnL, fitInfo{iObj}.cvW, cvPrediction{iObj}]          ...
+                                      = CategorizedModel.xvalRegularizationPath(targetY, designX, lambdaRatio(bestIndex), options, cvTrainSel{iObj}(:,:,2));
+        fitInfo{iObj}.cvW             = squish(fitInfo{iObj}.cvW, 2);
       end
       
       %% Store fitted parameters
@@ -494,9 +531,8 @@ classdef CategorizedModel < handle
         obj(iObj).fitInfo             = fitInfo{iObj};
         obj(iObj).fitInfo.modelW      = modelW{iObj};
         obj(iObj).prediction          = cvPrediction{iObj};
-        obj(iObj).regressors          = buildGLM.combineWeights(obj(iObj).design, modelW{iObj}(:,obj(iObj).fitInfo.(CategorizedModel.REGINDEX)));
-        obj(iObj).regressors.bias     = obj(iObj).fitInfo.Intercept(obj(iObj).fitInfo.(CategorizedModel.REGINDEX));
-%         obj(iObj).shufflePvalue   = mean( deviance <= deviance(1) );    % N.B. the unshuffled experiment is included as a pseudo-count to provide a conservative nonzero estimate
+        obj(iObj).regressors          = buildGLM.combineWeights(obj(iObj).design, modelW{iObj});
+%         obj(iObj).regressors.bias     = modelW{iObj}(end - options.intercept + 1:end);
       end
     end
     
@@ -620,18 +656,79 @@ classdef CategorizedModel < handle
       obj                       = obj(iOrder);
     end
     
-    %----- Assign rankings (1 is best) to all models in the given set, given a goodness-of-fit function 
-    function [obj, gof, iOrder, ranking] = assignRanks(obj, fcn, direction, varargin)
-      if nargin < 3
-        direction               = '';
-      elseif ~isempty(direction) && ~ischar(direction)
-        varargin                = [{direction}, varargin];
-        direction               = '';
+    
+    %----- Regressor responses for each trial category
+    function [response, time, numModels] = responseByCategory(obj, categoryLabels, categoryValues)
+    % The Poisson GLM model predicts the neural responses in a given trial of category k to be
+    % Poisson distributed with mean function
+    %   \mu_k(t) = exp( m_k^{(1)}(t) + m_k^{(2)}(t) + ... + m_k^{(n)}(t) )
+    % where the parenthesized indices i in m_k^{(i)} indicate temporal responses to the i-th type 
+    % of behavioral event. If the specialization by trial category k is not of interest, i.e.
+    % omitted from the categoryLabels input set, this function returns the average response
+    %   \sum_k m_k^{(i)}(t)
+    % for each behavioral event i, where the sum is over all N values k of the k-specialized models.
+    % This is equivalent to taking the geometrical mean prediction \prod_k \mu_k(t) / N, as opposed
+    % to the arithmetic mean.
+      
+      %% Check input format
+      if ischar(categoryLabels)
+        categoryLabels    = {categoryLabels};
       end
-      [obj, iOrder, gof]        = obj.sort(fcn, direction, varargin{:});
-      ranking                   = num2cell(1:numel(obj));
-      [obj.ranking]             = ranking{:};
+      if numel(categoryLabels) ~= size(categoryValues,2)
+        error('CategorizedModel:responseByCategory', 'categoryValues must be an n-by-p matrix where n is the number of condition combinations to compute regressor responses for, and p is the number of categoryLabels.');
+      end
+      
+      %% All models are required to be based on the same data
+      experiment          = obj(1).design.dspec.expt;
+      if any(~arrayfun(@(x) isequal(x.design.dspec.expt.id,experiment.id), obj(2:end)))
+        error('CategorizedModel:responseByCategory', 'Inconsistent experimental data encountered for the given set of models.');
+      end
+      
+      %% Preallocate output
+      egRegressors        = obj(1).regressors;
+      regType             = fieldnames(egRegressors);
+      regType( cellfun(@(x) ~isstruct(egRegressors.(x)), regType) )  = [];
+      numModels           = zeros(size(categoryValues,1), 1);
+      response            = struct();
+      time                = struct();
+      for iReg = 1:numel(regType)
+        response.(regType{iReg})  = zeros(numel(egRegressors.(regType{iReg}).response), size(categoryValues,1));
+        time.(regType{iReg})      = egRegressors.(regType{iReg}).time;
+      end
+      
+      %% Store category-specific regressors, taking the average across specializations for categories not in the desired categoryLabels
+      specs               = obj.specializations();
+      for iObj = 1:numel(obj)
+        %% Identify categoryValues that this object contributes to
+        isInCat           = true(size(categoryValues));
+        for what = fieldnames(specs(iObj))'
+          selCat          = strcmp(categoryLabels, what{:});
+          isInCat(:,selCat) = ismember( categoryValues(:,selCat), specs(iObj).(what{:}) );
+        end
+        isInCat           = all(isInCat, 2);
+        
+        %% Add regressor contribution to all relevant categories
+        for iReg = 1:numel(regType)
+          for iCat = find(isInCat)'
+            response.(regType{iReg})(:,iCat)      ...
+                          = response.(regType{iReg})(:,iCat) + obj(iObj).regressors.(regType{iReg}).response;
+            assert(isequal(time.(regType{iReg}), obj(iObj).regressors.(regType{iReg}).time));
+          end
+        end
+        numModels         = numModels + isInCat;
+      end
+      
+      %% Divide by number of contributing models to obtain average
+      for iCat = 1:numel(response)
+        if ~numModels(iCat)
+          continue        % this can happen if the user provided categoryValues that are a superset of what the models were trained on
+        end
+        for iReg = 1:numel(regType)
+          response(iCat).(regType{iReg})      = response(iCat).(regType{iReg}) / numModels(iCat);
+        end
+      end
     end
+    
   end
   
 end

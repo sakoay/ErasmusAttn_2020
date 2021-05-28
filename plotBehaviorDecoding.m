@@ -4,8 +4,19 @@ function plotBehaviorDecoding(modelFile)
   load(modelFile);
   
   % Omit cells that could not be fit due to data restrictions
-  decoder(~cellfun(@(x) isfield(x,'experiment'), decoder)) = [];
+  decoder(~cellfun(@(x) isfield(x,'experiment'), decoder))  = [];
   decoder             = [decoder{:}];
+  
+  %% UGLY : ensure that all decoders have the same fields
+  for iBehav = 1:numel(cfg.behavCategories)
+    for iDec = 1:numel(decoder)
+      if ~isfield(decoder(iDec).(cfg.behavCategories{iBehav}), 'model')
+        for iSub = 1:numel(decoder(iDec).(cfg.behavCategories{iBehav}))
+          decoder(iDec).(cfg.behavCategories{iBehav})(iSub).model = [];
+        end
+      end
+    end
+  end
   
   %% Analysis configuration
   cfg.animal          = regexprep(decoder(1).experiment.id, '_.*', '');
@@ -23,15 +34,16 @@ function plotBehaviorDecoding(modelFile)
   %}
   
   %% Plots for decoders that are further separated by condition values
-%   %{
+  %{
   nSubsets            = cellfun(@(x) numel(decoder(1).(x)), cfg.behavCategories);
-  [pan, shape, fig]   = makePanels( [sum(nSubsets(nSubsets > 1)),numel(cfg.behavEvents)], cfg.animal, cfg.animal     ...
-                                  , 'aspectratio', 1.25, 'twosided', true, 'maxsubplotsize', 200 );
-  iDecode             = 1;
   for iBehav = 1:numel(cfg.behavCategories)
-    if nSubsets(iBehav) > 1
-      iDecode         = plotDecodingStatistics(pan, iDecode, shape, cat(1,decoder.(cfg.behavCategories{iBehav})), false, cfg);
+    if nSubsets(iBehav) < 2
+      continue;
     end
+    
+    [pan, shape, fig] = makePanels( [nSubsets(iBehav),numel(cfg.behavEvents)], cfg.animal, cfg.animal     ...
+                                  , 'aspectratio', 1.25, 'twosided', true, 'maxsubplotsize', 200 );
+    plotDecodingStatistics(pan, 1, shape, cat(1,decoder.(cfg.behavCategories{iBehav})), false, cfg);
   end
   %}
   
@@ -42,12 +54,15 @@ function iRow = plotDecodingStatistics(pan, startRow, shape, decoder, averageAcc
   %% Decoding using neural data aligned to different behavioral events
   for iAlign = 1:numel(cfg.behavEvents)
     %% Collect results along a common time axis across cells
-    timeRange         = accumfun(2, @(x) extrema(x.model(iAlign).alignedTime(:)), decoder);
+    timeRange         = accumfun(2, @(x) extrema(x.model(iAlign).alignedTime(:)), decoder(~arrayfun(@(x) isempty(x.model), decoder)));
     timeRange         = [min(timeRange(1,:)), max(timeRange(2,:))];
     alignedTime       = timeRange(1):cfg.timeBin:timeRange(2);
     
     accuracy          = nan([numel(alignedTime), numel(decoder), cfg.nShuffles+1]);
     for iModel = 1:numel(decoder)
+      if isempty(decoder(iModel).model)
+        continue
+      end
       model           = decoder(iModel).model(iAlign);
       iTime           = binarySearch(alignedTime, model.alignedTime, 0, 0);
       accuracy(iTime,iModel,:)  = model.accuracy;
@@ -59,13 +74,16 @@ function iRow = plotDecodingStatistics(pan, startRow, shape, decoder, averageAcc
       case 0
         %% No averaging
         pValue        = mean(accuracy(:,:,:,2:end) >= accuracy(:,:,:,1), 4);
+%         pValue        = mean(accuracy >= accuracy(:,:,:,1), 4);
       case 1
         %% Average accuracies across decoders, and then compute p-value per time bin and neuron
         accuracy      = mean(accuracy, 3);
         pValue        = mean(accuracy(:,:,:,2:end) >= accuracy(:,:,:,1), 4);
+%         pValue        = mean(accuracy >= accuracy(:,:,:,1), 4);
       case 2
         %% Use best p-value across subset-specific decoders
         pValue        = mean(accuracy(:,:,:,2:end) >= accuracy(:,:,:,1), 4);
+%         pValue        = mean(accuracy >= accuracy(:,:,:,1), 4);
         pValue(isnan(accuracy(:,:,:,1)))  = nan;
         nModels       = sum(~isnan(pValue), 3);
         pValue        = nModels .* min(pValue,[],3);    % Bonferroni correction for taking the best of two tests
@@ -88,14 +106,14 @@ function iRow = plotDecodingStatistics(pan, startRow, shape, decoder, averageAcc
 %       isSignificant   = pValue(:,:,iDecode) <= cfg.significance;
       [phat, pci]     = binointerval(sum(isSignificant,2), sum(~isnan(pValue(:,:,iDecode)),2), cfg.significance);
 
-      %% Decoding accuracy across cells
+      %% Distribution of decoding accuracies across cells
       axs             = selectPanel(pan, [iRow,iAlign], shape);
       yRange          = [0, 1];
 %       yRange          = [0, max(accuracy(:,:,iDecode),[],'all')];
       xlabel(axs, sprintf('Time from %s', strrep(model.alignment,'_',' ')));
       ylabel(axs, sprintf('%s accuracy', strrep(decoder(1).variable,'_',' ')));
       set(axs, 'xlim', alignedTime([1 end]), 'ylim', yRange);
-      if averageAccuracy
+      if ~averageAccuracy
         title(axs, sprintf('%s = %s', strrep(decoder(1,iDecode).variable,'_',' '), mat2str(decoder(1,iDecode).values)), 'FontWeight', 'normal');
       end
 
@@ -103,6 +121,9 @@ function iRow = plotDecodingStatistics(pan, startRow, shape, decoder, averageAcc
       line('parent', axs, 'xdata', alignedTime, 'ydata', nanmean(nullAccuracy(:,:,iDecode),2), 'linewidth', 1.5, 'linestyle', '-.', 'color', [1 1 1]*0.5);
       bandplot(axs, alignedTime, accuracy(:,:,iDecode), cfg.confIntFcn);
 %     text(alignedTime(end), nanmean(nullAccuracy(:)), ' (chance)', 'parent', axs, 'fontsize', 14, 'color', [1 1 1]*0.5, 'clipping', 'off');
+
+      %% Decoding accuracies for cells that are significant 
+%       bandplot(axs, alignedTime, accuracy(:,any(isSignificant,1),iDecode), cfg.confIntFcn);
 
       %% Fraction of cells with significant decoding
       yyaxis(axs, 'right');

@@ -51,7 +51,7 @@ function fig = plotCellData(data, experiment)
   [condition,~,condIndex] = unique([data.trials.condition_code]);
   
   %% Labels for trial categories
-  CdirLabel               = parseSpecs(experiment.desc.C_location   , config(:,1));
+  CdirLabel               = parseSpecs(experiment.desc.C_location    , config(:,1));
   condLabel               = parseSpecs(experiment.desc.condition_code, condition);
   
   %% Configure plots
@@ -105,6 +105,9 @@ function fig = plotCellData(data, experiment)
 
       %% Indicate stimulus periods with a line
       yOffset             = numel(trial) * rateRange * 0.05;
+      if isnan(yOffset)
+        yOffset           = 1;
+      end
       iOffset             = 0;
       ticks               = [];
       tickLabels          = {};

@@ -1,12 +1,20 @@
-function fitSingleCellGLM(dataFile, perTrialScale, lazy)
+% ff = rdir('C:\Neuroscience\ErasmusAttn\glmExpt_*.mat');
+% for ii = 1:numel(ff); decodeTrialOutcome(ff(ii).name); end
+function fitSingleCellGLM(dataFile, baselineTrials, lazy)
 
   %% Default arguments
-  if ~exist('perTrialScale', 'var') || isempty(perTrialScale)
-    perTrialScale     = true;
+  if ~exist('baselineTrials', 'var')
+    baselineTrials    = 5;
   end
   if ~exist('lazy', 'var') || isempty(lazy)
     lazy              = true;
   end
+  
+  %% Setup optimization package
+  optimPackage        = dir(fullfile(fileparts(mfilename('fullpath')), 'spams*', 'start_*.m'));
+  origDir             = cd(optimPackage.folder);
+  run(optimPackage.name);
+  cd(origDir);
 
   %% Analysis configuration
   cfg                 = struct();
@@ -14,23 +22,24 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
   % Cross validation and permutation tests
   cfg.nCVFolds        = 5;
   cfg.nLambdas        = 10;
+  cfg.minLambda       = 1e-4;
   cfg.maxRelLikeli    = 0.1;            % maximum relative likelihood of models to continue specialization
   
   % Trial selection criteria
-  cfg.maxCueStart     = 300;            % maximum allowed interval from fixation on to cue presentation, in ms
+  cfg.maxCueStart     = 1000;           % maximum allowed interval from fixation on to cue presentation, in ms
   cfg.selectConditions= 1:2;            % keep only trials with these condition_code
   cfg.selectPastCond  = 0:4;            % keep only trials with these past_condition
   cfg.minNumTrials    = cfg.nCVFolds;   % minimum number of trials for fitting models
   
   % Maximum duration of neural responses per behavioral event
   cfg.eventDuration   = 1500;           % in ms
-  cfg.eventNBasis     = 4;              % number of basis functions to use per event-response
+  cfg.eventNBasis     = 5;              % number of basis functions to use per event-response
 %   cfg.eventDuration   = 2000;           % in ms
 %   cfg.eventNBasis     = 5;              % number of basis functions to use per event-response
   
-  % Configuration for lassoglm()
-  cfg.fitOptions      = {'Alpha', 0.5};
-  
+  % Configuration for SPAMS
+  cfg.fitOptions      = struct('loss', 'poisson-log', 'regul', 'group-lasso-l2', 'intercept', true, 'max_it', 1e5, 'verbose', false, 'L0', 1e-5, 'ista', true, 'linesearch_mode', 2);
+
   %% Load data
   if isstruct(dataFile)
     data              = dataFile;
@@ -42,11 +51,8 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
   [path,name,ext]     = parsePath(dataFile);
 %   name                = sprintf('glmFit_%s_min%dtrials_%.0flikeli', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials, 100*cfg.maxRelLikeli);
   name                = sprintf('glmFit_%s_min%dtrials_%.0fdur', regexprep(name, '^[^_]+_', ''), cfg.minNumTrials, cfg.eventDuration);
-  if ~isempty(cfg.fitOptions)
-    name              = [name '_' strjoin(strcat(cfg.fitOptions(:,1), regexprep(cellfun(@num2str,cfg.fitOptions(:,2),'UniformOutput',false),'[^0-9]','')), '_')];
-  end
-  if perTrialScale
-    name              = [name '_perTrialScale'];
+  if ~isempty(baselineTrials)
+    name              = sprintf('%s_baseline%d', name, baselineTrials);
   end
   outputFile          = fullfile(path, [name ext]);
   
@@ -59,6 +65,9 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
   
   % Not sure how to deal with these yet
   cfg.behavConditions = setdiff(cfg.behavConditions, {'trial_nr', 'reward_duration', 'saccade_amplitude'});
+  
+  % Too many categories to search over
+  cfg.behavConditions( ~cellfun(@isempty, regexp(cfg.behavConditions, '^past_(?!condition)', 'once')) ) = [];
   
   %% Support resuming of previously saved fits
   CategorizedModel.nextID(0);
@@ -85,10 +94,12 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
     selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                      ...
                       & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)    ...
                       & ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond)      ...
+                      & arrayfun(@(x) ~isempty(x.SS), data.cellData(iCell).trials(:)')                  ... % not sure why some trials can have zero spikes
                       ;
     experiment        = data.experiment;
     experiment.id     = [data.cellData(iCell).monkey '_' data.cellData(iCell).cell_id];
     experiment.trial  = data.cellData(iCell).trials(selTrials);
+    experiment.selectedTrials   = selTrials;
     
     if numel(experiment.trial) < cfg.minNumTrials
       unspecializedModel{iCell} = experiment;
@@ -120,12 +131,28 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
     design.dspec.expt.numTimeBins = size(design.X,1);
     design.dspec.expt.trialBins   = trialBin;
  
-    %% Optional scaling of regressors for each trial by the average firing rate in that trial
-    if perTrialScale
-      meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);
-      design.X        = bsxfun(@times, design.X, meanRate(design.trialX));
-    end
+    %% Scale regressors so that they have unit standard deviation 
+%     design.X          = unitSpreadDirection(design.X, false, false);
+%     longfigure; imagesc(design.X'); tempscale
     
+    %% Optional scaling of regressors for each trial by the average firing rate in that trial
+    if baselineTrials
+      meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);    % rate in 1/ms
+      meanRate        = log(meanRate * experiment.binSize);                         % convert rate to the time bins used
+      design.X(:,end+1) = meanRate(design.trialX);
+      design.biasCol  = size(design.X,2);
+    end
+%     design.X(:,end+1) = 1 / numel(experiment.trial);
+    %% Optional scaling of regressors for each trial by the moving average firing rate 
+    if ~isempty(baselineTrials)
+      meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);    % rate in 1/ms
+%       longfigure; hold on; plot(meanRate); plot(movingAverage(meanRate, baselineTrials, 1))
+      meanRate        = movingAverage(meanRate, baselineTrials, 1);
+      meanRate        = log(meanRate * experiment.binSize);                         % convert rate to the time bins used
+      design.X(:,end+1) = meanRate(design.trialX);
+      design.biasCol  = size(design.X,2);
+    end
+
     %% Store model specifications and data for this cell
     firingRate        = full(buildGLM.getBinnedSpikeTrain(experiment, 'SS', design.trialIndices));
     unspecializedModel{iCell}     = CategorizedModel(firingRate, design);
@@ -135,7 +162,7 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
   fprintf('Fitting unspecialized models for %d/%d cells...\n', sum(cellfun(@(x) ~isstruct(x) && isempty(x.prediction), unspecializedModel)), numel(data.cellData));
   parfor iCell = 1:numel(unspecializedModel)
     if ~isstruct(unspecializedModel{iCell}) && isempty(unspecializedModel{iCell}.prediction)
-      unspecializedModel{iCell} = unspecializedModel{iCell}.regress(cfg.nCVFolds, cfg.nLambdas, false, cfg.fitOptions{:});
+      unspecializedModel{iCell} = unspecializedModel{iCell}.regress(cfg.nCVFolds, cfg.fitOptions, false, cfg.nLambdas, cfg.minLambda);
     end
   end
   
@@ -158,7 +185,7 @@ function fitSingleCellGLM(dataFile, perTrialScale, lazy)
     if isempty(categoryModel{iCell})
       categModel      = fullModel.specialize('behavior_code', false, cfg.minNumTrials);
       categModel      = categModel{1};
-      categoryModel{iCell}    = categModel.regress(cfg.nCVFolds, cfg.nLambdas, true, cfg.fitOptions{:});
+      categoryModel{iCell}    = categModel.regress(cfg.nCVFolds, cfg.fitOptions, true, cfg.nLambdas, cfg.minLambda);
     end
   
     %% Hierarchical model to find a parsimonious set of trial-category-based specializations for this neuron's response
@@ -197,7 +224,7 @@ function [model, altModels] = buildHierarchicalModel(basicModel, conditionLabels
     
     %% Parallel optimization for all candidate models; N.B. handle objects are modified in place
     allModels               = [candModel{:}];
-    allModels.regress(cfg.nCVFolds, cfg.nLambdas, true, cfg.fitOptions{:});
+    allModels.regress(cfg.nCVFolds, cfg.fitOptions, true, cfg.nLambdas, cfg.minLambda);
     
     %% Select model with the best relative likelihood w.r.t. the less specialized parent model
     relLikeli               = cellfun(@(x) x.relativeLikelihood(), candModel);
