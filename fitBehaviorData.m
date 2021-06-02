@@ -9,10 +9,10 @@ function fitBehaviorData(dataFile, postfix)
   cfg                 = struct();
 
   % Mapping of gap direction onto -1/+1
-  cfg.gapSignMap      = [  270     -1     ... left
-                        ;   90     +1     ... right
-                        ;  180     -1     ... down
-                        ;    0     +1     ... up
+  cfg.gapSignMap      = [  180     -1     ... left
+                        ;    0     +1     ... right
+                        ;  270     -1     ... down
+                        ;   90     +1     ... up
                         ];
   %                         -1     +1         sign mapping
   cfg.ClocationMap    = [    5      1     ... left/right -> horizontal

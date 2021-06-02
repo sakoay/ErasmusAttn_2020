@@ -28,7 +28,8 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
   % Trial selection criteria
   cfg.maxCueStart     = 1000;           % maximum allowed interval from fixation on to cue presentation, in ms
   cfg.selectConditions= 1:2;            % keep only trials with these condition_code
-  cfg.selectPastCond  = 0:4;            % keep only trials with these past_condition
+%   cfg.selectPastCond  = 0:4;            % keep only trials with these past_condition
+  cfg.selectPastCond  = 1:2;            % keep only trials with these past_condition
   cfg.minNumTrials    = cfg.nCVFolds;   % minimum number of trials for fitting models
   
   % Maximum duration of neural responses per behavioral event
@@ -67,7 +68,10 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
   cfg.behavConditions = setdiff(cfg.behavConditions, {'trial_nr', 'reward_duration', 'saccade_amplitude'});
   
   % Too many categories to search over
-  cfg.behavConditions( ~cellfun(@isempty, regexp(cfg.behavConditions, '^past_(?!condition)', 'once')) ) = [];
+%   cfg.behavConditions( ~cellfun(@isempty, regexp(cfg.behavConditions, '^past_(?!condition)', 'once')) ) = [];
+
+  %% Use same trial categories as behavior model
+  cfg.behavConditions(cellfun(@isempty, regexp(cfg.behavConditions, 'gap|saccade', 'once')))  = [];
   
   %% Support resuming of previously saved fits
   CategorizedModel.nextID(0);
@@ -109,6 +113,7 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
     %% Divide trials into categories according to various stimulus and outcome variables
     trialConditions   = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavConditions);
     [trialCategory, ~, categIndex]    = unique(trialConditions, 'rows');
+    assert(~any(isnan(trialCategory(:))));
     
     % Construct a joint code for unique data categories
     categDigits       = 1 + max(floor(log10(max(1,trialCategory))), [], 1);
@@ -135,14 +140,6 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
 %     design.X          = unitSpreadDirection(design.X, false, false);
 %     longfigure; imagesc(design.X'); tempscale
     
-    %% Optional scaling of regressors for each trial by the average firing rate in that trial
-    if baselineTrials
-      meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);    % rate in 1/ms
-      meanRate        = log(meanRate * experiment.binSize);                         % convert rate to the time bins used
-      design.X(:,end+1) = meanRate(design.trialX);
-      design.biasCol  = size(design.X,2);
-    end
-%     design.X(:,end+1) = 1 / numel(experiment.trial);
     %% Optional scaling of regressors for each trial by the moving average firing rate 
     if ~isempty(baselineTrials)
       meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);    % rate in 1/ms
@@ -181,12 +178,14 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
     fprintf('  [%3d]  %-20s', iCell, fullModel.design.dspec.expt.id);
     drawnow;
       
-    %% Fit model separately for data per unique category
+    %% Unused : Fit model separately for data per unique category
+    %{
     if isempty(categoryModel{iCell})
       categModel      = fullModel.specialize('behavior_code', false, cfg.minNumTrials);
       categModel      = categModel{1};
       categoryModel{iCell}    = categModel.regress(cfg.nCVFolds, cfg.fitOptions, true, cfg.nLambdas, cfg.minLambda);
     end
+    %}
   
     %% Hierarchical model to find a parsimonious set of trial-category-based specializations for this neuron's response
     if isempty(hierarchicalModel{iCell})

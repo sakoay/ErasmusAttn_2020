@@ -362,10 +362,10 @@ function fig = plotFitHierarchy(model, description, cfg)
     axs                   = selectPanel(pan, iDetail + 1, shape);
     if iDetail
       specialization      = modelSpecs;
-      nudge(axs, [-0.15 0 0.15 0]);
+      nudge(axs, [-0.1 0 0.15 0]);
     else
       specialization      = regexprep(modelSpecs, '=.*', '');
-      nudge(axs, [0 0 -0.2 0]);
+      nudge(axs, [-0.05 0 0 0]);
     end
     modelFits             = model;
     
@@ -414,14 +414,14 @@ function fig = plotFitHierarchy(model, description, cfg)
     set(axs, 'xcolor', 'none', 'ycolor', 'none');
     axis(axs, 'tight');
     
-    hGraph                = plot(modelGraph, 'Parent', axs, 'Layout', 'layered', 'LineWidth', modelGraph.Edges.Weight);
+    hGraph                = plot(modelGraph, 'Parent', axs, 'Layout', 'layered', 'LineWidth', 0.5*modelGraph.Edges.Weight);
     % Condense node labels
     nodeLabel             = get(hGraph, 'NodeLabel');
     labeledge(hGraph, 1:size(modelGraph.Edges,1), modelGraph.Edges.Weight);
     set( hGraph, 'PickableParts', 'none', 'NodeLabel', regexprep(nodeLabel, '^.*->([^>]*)$', '$1'), 'NodeFontSize', 12, 'MarkerSize', 7   ...
        , 'EdgeColor', [1 1 1]*0.6, 'EdgeLabelColor', [1 1 1]*0.3, 'NodeLabelColor', [0.8 0 0], 'UserData', modelGraph );
     
-   %% Interactive plotting of cells with the selected hierarchy
+    %% Interactive plotting of cells with the selected hierarchy
     hSelect               = line('Parent', axs, 'XData', [], 'YData', [], 'Marker', 'o', 'MarkerSize', 11, 'LineWidth', 3, 'MarkerEdgeColor', [240 200 46]/255, 'PickableParts', 'none');
     set(axs, 'Box', 'off', 'XTick', [], 'YTick', [], 'ButtonDownFcn', {@showCellsInHierarchy,hGraph,hSelect,description,cfg}, 'Interruptible', 'off', 'BusyAction', 'cancel');
   end

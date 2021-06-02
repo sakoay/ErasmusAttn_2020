@@ -38,6 +38,8 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
   experiment          = buildGLM.registerValue(experiment, 'past_gap', 'Orientation of the gap in the C');
   experiment          = buildGLM.registerValue(experiment, 'reward_duration', 'Amount of juice received');
   experiment          = buildGLM.registerValue(experiment, 'saccade_amplitude', 'Degrees of deflection in detected saccade');
+  experiment          = buildGLM.registerValue(experiment, 'saccade_direction', 'Orientation of saccade, counterclockwise from north in degrees');
+  experiment          = buildGLM.registerValue(experiment, 'past_saccade', 'Orientation of saccade, counterclockwise from north in degrees');
 
   % Task events
   experiment          = buildGLM.registerTiming(experiment, 'fix_on', 'Monkey initiates trial by fixation');
@@ -115,6 +117,25 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
       %% Flatten past-trial fields for convenience
       for what = fieldnames(source.n_minus_1)'
         source.(['past_', regexprep(what{:},'_.*','')]) = source.n_minus_1.(what{:});
+      end
+      
+      %% Deduce saccade direction
+      switch source.condition_code
+        case 1        % error trial
+          source.saccade_direction  = mod(source.gap_direction + 180, 360);
+        case 2        % correct trial
+          source.saccade_direction  = source.gap_direction;
+        otherwise
+          source.saccade_direction  = nan;
+      end
+      
+      switch source.past_condition
+        case 1        % error trial
+          source.past_saccade       = mod(source.past_gap + 180, 360);
+        case 2        % correct trial
+          source.past_saccade       = source.past_gap;
+        otherwise
+          source.past_saccade       = nan;
       end
       
       %% Truncate data to only the extent of this trial
