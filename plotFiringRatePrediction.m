@@ -49,7 +49,7 @@ function specs = formatSpecs(specs, conditions, abbreviate)
   specs         = regexprep(specs, '_+', ' ');
 end
 
-function fig = plotPredictionByCondition(model, description, cfg, showDetails)
+function fig = plotTrialPredictions(model, description, cfg, showDetails)
 
   %% Default arguments
   if ~exist('showDetails', 'var') || isempty(showDetails)
@@ -336,6 +336,123 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
   
 end
 
+function fig = plotPredictionByCondition(model, description, cfg, showDetails)
+
+  %% Default arguments
+  if ~exist('showDetails', 'var') || isempty(showDetails)
+    showDetails           = false;
+  end
+  
+  %% Common figure for all cells
+  experiment              = model{1}(1).design.dspec.expt;
+  [pan,shape,fig]         = makePanels( numel(model), experiment.id, strrep(experiment.id,'_',' ')          ...
+                                      , 'aspectratio', 1, 'plotmargins', struct('b',25), 'panelmargins', struct('b',15,'t',20), 'maxsubplotsize', 180 );
+                                    
+  %% Plot individual cells
+  for iCell = 1:numel(model)
+    %% Use the basic unspecialized model as a comparison
+    refModel              = unique(model{iCell}.firstAncestor);
+    conditionCodes        = parseVariableSpecifications(experiment.desc.condition_code);
+    eventName             = fieldnames(refModel.regressors);
+    eventName(~cellfun(@(x) isstruct(refModel.regressors.(x)), eventName))  = [];
+
+    yRange                = cellfun(@(x) max(exp(refModel.regressors.bias + refModel.regressors.(x).response)), eventName);
+
+    %% Specify categories of trials for which to plot regressors together
+    modelSpecs            = model{iCell}.specializations(true);
+    categories            = fieldnames(modelSpecs);
+    [catValues,~,catIndex]= cellfun(@(x) unique({modelSpecs.(x)}), categories, 'UniformOutput', false);
+    nSubCat               = cellfun(@numel, catValues(2:end));
+    if isempty(nSubCat)
+      nSubCat             = 1;
+      subCatIndex         = ones(size(model));
+    else
+      subCatIndex         = sub2ind([nSubCat; 1], catIndex{2:end});
+    end
+
+    yRange(:,2:prod(nSubCat)) = 0;
+
+    %% Axes labels and plot colors
+    lineStyle               = {'-.', '-'};
+    catColor                = lines(numel(catValues{1}));
+    catLabel                = parseVariableSpecifications(experiment.desc.(categories{1}), catValues{1});
+    catLabel                = [strrep(categories{1},'_',' '), ' = ', strjoin(coloredText(catLabel, catColor), ' | ')];
+    
+    axs                     = selectPanel(pan, iCell, shape);
+    hold(axs, 'on');
+    axis(axs, 'tight');
+    title(axs, catLabel, 'fontweight', 'normal');
+    xlabel(axs, 'Time from fixation (s)');
+    ylabel(axs, sprintf('# spikes / %.3g%s', experiment.binSize, experiment.unitOfTime));
+
+    %% Compare each regressor across trial categories
+    for iCat = 1:prod(nSubCat)
+      iModel              = find(subCatIndex == iCat,1,'first');
+      if isempty(iModel)
+        continue
+      end
+      
+      %% Warped time: linear resampling between behavioral epochs, so as to register all trials to a mean duration
+      trialEventWarpedTime(model{iCell}(1).design.dspec.expt, eventName);
+      
+
+      %% Category label
+      specs               = model(iModel).specializations(true);
+      catLabel            = cellfun(@(x) specs.(x), categories(2:end), 'UniformOutput', false);
+      catLabel            = cellfun(@(x,y) parseVariableSpecifications(experiment.desc.(x),y,true), categories(2:end), catLabel, 'UniformOutput', false);
+      sel                 = cellfun(@iscell, catLabel);
+      catLabel(sel)       = cellfun(@(x) ['[' strjoin(x,';') ']'], catLabel(sel), 'UniformOutput', false);
+      catLabel            = strcat(categories(2:end), '=', catLabel);
+      catLabel            = strjoin(formatSpecs(catLabel, conditionCodes), ', ');
+
+      %% Axes formatting
+      axs                 = selectPanel(pan, [iCat,iReg], shape);
+      hold(axs, 'on');
+      axis(axs, 'tight');
+      title(axs, catLabel, 'fontweight', 'normal');
+%       xlabel(axs, sprintf('t from %s (%s)', strrep(eventName{iReg},'_',' '), experiment.unitOfTime));
+      xlabel(axs, sprintf('t from %s', strrep(eventName{iReg},'_',' ')));
+      ylabel(axs, sprintf('# spikes / %.3g%s', experiment.binSize, experiment.unitOfTime));
+
+      %% Plot reference unspecialized model regressors
+      regressor           = refModel.regressors.(eventName{iReg});
+      line( 'parent', axs, 'xdata', regressor.time, 'ydata', exp(model(iModel).regressors.bias + regressor.response)  ...
+          , 'color', [1 1 1]*0.7, 'linewidth', 2, 'linestyle', '--' );
+
+      %% Plot the contribution to the Poisson distribution mean that is solely due to this regressor
+      % N.B. This assumes that we performed a GLM fit with Poisson distributed data and a
+      % logarithmic link function
+      for iModel = 1:numel(model)
+        regressor         = model(iModel).regressors.(eventName{iReg});
+        selModel          = subCatIndex(iModel) == iCat;
+        if ~showDetails && ~selModel
+          continue
+        end
+
+        response          = exp(model(iModel).regressors.bias + regressor.response);
+        yRange(iReg,iCat) = max([yRange(iReg,iCat); response]);
+        line( 'parent', axs, 'xdata', regressor.time, 'ydata', response   ...
+            , 'color', catColor(catIndex{1}(iModel),:), 'linewidth', 1+selModel, 'linestyle', lineStyle{selModel+1} );
+      end
+    end
+  end
+  
+  %% Synchronize plot ranges
+  isOutlier               = yRange > 5*median(yRange(:));
+  yRange                  = [0, max(yRange(~isOutlier))];
+
+  for iReg = 1:numel(eventName)
+    for iCat = 1:prod(nSubCat)
+      if isOutlier(iReg,iCat)
+        continue
+      end
+      set(selectPanel(pan, [iCat,iReg], shape), 'ylim', yRange);
+    end
+  end
+  
+end
+
+
 function fig = plotFitHierarchy(model, description, cfg)
 
   %% Get hierarchy descriptions for all models in the given set
@@ -429,14 +546,6 @@ function fig = plotFitHierarchy(model, description, cfg)
   
 end
 
-function fig = compareModelPredictions(model, description, cfg)
-  %% Configure plots
-  [pan,shape,fig]         = makePanels( size(trialCategory,1), experiment.id, [strrep(experiment.id,'_',' ') ' : ' description]     ...
-                                      , 'aspectratio', 1, 'plotmargins', struct('b',20), 'panelmargins', struct('b',15,'t',15), 'maxsubplotsize', 200 );
-  refColor                = [0 123 255] / 255;
-  modelColor              = [0.8 0 0];
-end
-
 function showCellsInHierarchy(hObject, event, hGraph, hSelect, varargin)
   
   %% Locate the closest graph node to where the user has clicked
@@ -471,13 +580,19 @@ function showCellsInHierarchy(hObject, event, hGraph, hSelect, varargin)
     set(get(hObject,'Parent'), 'Pointer', 'watch');
     drawnow;
     
+    %% Plot predictions across cells
+    hFig                = plotPredictionByCondition(models, varargin{:});
+    
+    %% Plot regressors per cell
+    %{
     hFig                = gobjects(numel(models),2);
     for iModel = 1:numel(models)
-%       hFig(iModel,1)    = plotPredictionByCondition(models{iModel}, varargin{:});
       hFig(iModel,2)    = plotRegressorsByCondition(models{iModel}, varargin{:});
       drawnow;
     end
+    %}
     
+    %% Store plot handles for later retrieval
     modelGraph.Nodes{iClosest, 'Plot'}  = {hFig};
     set(hGraph, 'UserData', modelGraph);
     set(get(hObject,'Parent'), 'Pointer', 'arrow');

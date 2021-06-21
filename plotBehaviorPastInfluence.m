@@ -63,7 +63,7 @@ function plotBehaviorPastInfluence(modelFile)
     selCell           = strncmp(model.experiment, [model.experiment{aniIndex(iAni)} '_'], numel(model.experiment{aniIndex(iAni)})+1);
     cellModel         = model.behaviorModel(selCell,:);
     
-    %% Plots for horizontal vs. vertical trial models
+    %% Unused : Plots for horizontal vs. vertical trial models
     %{
     [pan,shape,fig]   = makePanels([1,size(model.behaviorModel,2)], '', '', 'aspectratio', 1.2, 'maxsubplotsize', 300, 'panelmargins', struct('b',25));
     for iModel = 1:size(model.behaviorModel,2)

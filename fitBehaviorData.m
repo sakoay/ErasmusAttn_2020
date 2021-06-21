@@ -9,10 +9,10 @@ function fitBehaviorData(dataFile, postfix)
   cfg                 = struct();
 
   % Mapping of gap direction onto -1/+1
-  cfg.gapSignMap      = [  180     -1     ... left
-                        ;    0     +1     ... right
-                        ;  270     -1     ... down
-                        ;   90     +1     ... up
+  cfg.gapSignMap      = [  270     -1     ... left
+                        ;   90     +1     ... right
+                        ;  180     -1     ... down
+                        ;    0     +1     ... up
                         ];
   %                         -1     +1         sign mapping
   cfg.ClocationMap    = [    5      1     ... left/right -> horizontal
@@ -50,7 +50,8 @@ function fitBehaviorData(dataFile, postfix)
   experiment          = cell(numel(data), 1);
   Xvariables          = [ {'gapLR'}, arrayfun(@(x) sprintf('past%d_gapLR',x), 1:cfg.numHistoryTerms, 'UniformOutput', false)  ...
                         , {'gapUD'}, arrayfun(@(x) sprintf('past%d_gapUD',x), 1:cfg.numHistoryTerms, 'UniformOutput', false)  ...
-                        , arrayfun(@(x) sprintf('past%d_saccade',x), 1:cfg.numHistoryTerms, 'UniformOutput', false)           ...
+                        , arrayfun(@(x) sprintf('past%d_saccadeLR',x), 1:cfg.numHistoryTerms, 'UniformOutput', false)         ...
+                        , arrayfun(@(x) sprintf('past%d_saccadeUD',x), 1:cfg.numHistoryTerms, 'UniformOutput', false)         ...
                         ];
   targetY             = cell(numel(data), 2);
   behaviorX           = cell(numel(data), 2);
@@ -90,9 +91,17 @@ function fitBehaviorData(dataFile, postfix)
       end
       
       %% Collect saccade directions up to the desired number of history terms
-      for iPast = 1:cfg.numHistoryTerms
-        iX                    = iX + 1;
-        behavX(:,iX)          = data(iCell).saccade_direction.(sprintf('n_%d',iPast))(sel);
+      for iDir = 1:nLocations
+        for iPast = 1:cfg.numHistoryTerms
+          iX                  = iX + 1;
+          behavX(:,iX)        = data(iCell).saccade_direction.(sprintf('n_%d',iPast))(sel);
+        end
+        
+        %% Flag with NaNs saccade directions that don't match the iDir selection (horizontal vs. vertical)
+        for jX = iX - cfg.numHistoryTerms + 1:iX
+          [~,gapIndex]        = ismember(behavX(:,jX), cfg.gapSignMap(:,1));
+          behavX( ~ismember(gapIndex, 2*iDir + (-1:0)), jX )  = nan;
+        end
       end
       
       %% Flag with NaNs past trial info where the gap direction was of a different modality than the current trial)

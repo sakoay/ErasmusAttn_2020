@@ -1,5 +1,5 @@
 % ff = rdir('C:\Neuroscience\ErasmusAttn\glmExpt_*.mat');
-% for ii = 1:numel(ff); decodeTrialOutcome(ff(ii).name); end
+% for ii = 1:numel(ff); fitSingleCellGLM(ff(ii).name); end
 function fitSingleCellGLM(dataFile, baselineTrials, lazy)
 
   %% Default arguments
@@ -98,7 +98,8 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
     selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                      ...
                       & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)    ...
                       & ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond)      ...
-                      & arrayfun(@(x) ~isempty(x.SS), data.cellData(iCell).trials(:)')                  ... % not sure why some trials can have zero spikes
+                      & arrayfun(@(x) ~isempty(x.SS), data.cellData(iCell).trials(:)')                  ... not sure why some trials can have zero spikes
+                      & arrayfun(@(x) ~isnan(x.saccade_onset), data.cellData(iCell).trials(:)')         ... must have timing info for all events 
                       ;
     experiment        = data.experiment;
     experiment.id     = [data.cellData(iCell).monkey '_' data.cellData(iCell).cell_id];
@@ -109,6 +110,8 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
       unspecializedModel{iCell} = experiment;
       continue;
     end
+    
+    assert(all( arrayfun(@(x) all(isfinite(cellfun(@(y) x.(y), cfg.behavEvents))), experiment.trial) ));
     
     %% Divide trials into categories according to various stimulus and outcome variables
     trialConditions   = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavConditions);
