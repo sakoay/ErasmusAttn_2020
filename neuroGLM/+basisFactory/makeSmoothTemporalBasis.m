@@ -51,7 +51,9 @@ elseif strcmpi(shape, 'progressive cosine x1.5')
     bcenters = 1 + [0, ((3/2).^(1:nBases-1) - 1)*sigma];    % location of each bump center
     bfun = @(x,period)((abs(x./period)<0.5).*(cos(x*2*pi./period)*.5+.5));
     BBstm = bfun(ttb-bcenters, width);
-%     figure; plot(BBstm)
+    
+%     longfigure(2,0.5); plot((0:nkbins-1) * duration / nkbins, BBstm,'linewidth',1.5); xlabel('Time from event (ms)'); ylabel('Basis function')
+    
 elseif strcmpi(shape, 'boxcar')
     width = nkbins / nBases;
     BBstm = zeros(size(ttb));

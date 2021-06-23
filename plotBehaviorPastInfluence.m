@@ -20,7 +20,7 @@ function plotBehaviorPastInfluence(modelFile)
   aniIndex            = find(~contains(model.experiment, '_')');
   modelColor          = lines(size(model.behaviorModel,2));
   
-  [pan,shape,fig]     = makePanels([1,2*numel(aniIndex)], '', '', 'aspectratio', 0.6, 'maxsubplotsize', 250, 'plotmargins', struct('l',30), 'panelmargins', struct('b',25));
+  [pan,shape,fig]     = makePanels([1,2*numel(aniIndex)], '', '', 'aspectratio', 0.8, 'maxsubplotsize', 300, 'plotmargins', struct('l',30), 'panelmargins', struct('b',30));
   for iAni = 1:numel(aniIndex)
     for iPast = 0:1
       selVar          = isPastVar == iPast;
@@ -36,9 +36,12 @@ function plotBehaviorPastInfluence(modelFile)
         title(axs, model.experiment{aniIndex(iAni)}, 'FontWeight', 'normal');
         nudge(axs, [-0.15 0 0.15 0]);
       else
-        nudge(axs, [0.01 0 -0.1 0]);
+        nudge(axs, [-0.01 0 -0.1 0]);
         ylabel(axs, 'Weight to predict saccade');
 %         set(axs, 'ylim', [0 2]);
+      end
+      if iAni > 1
+        nudge(axs, [0.02 0]);
       end
       line('parent', axs, 'xdata', xRange, 'ydata', [0 0], 'linestyle', '-.', 'linewidth', 1, 'color', [1 1 1]*0.7);
 
@@ -96,7 +99,7 @@ function plotBehaviorPastInfluence(modelFile)
 
     %% Plots for horizontal vs. vertical trial models
 %     %{
-    [pan,shape,fig]   = makePanels([1,2*size(model.behaviorModel,2)], '', '', 'aspectratio', 0.5, 'maxsubplotsize', 300, 'plotmargins', struct('l',30), 'panelmargins', struct('b',25));
+    [pan,shape,fig]   = makePanels([1,2*size(model.behaviorModel,2)], '', '', 'aspectratio', 0.8, 'maxsubplotsize', 300, 'plotmargins', struct('l',30), 'panelmargins', struct('b',30));
     for iModel = 1:size(model.behaviorModel,2)
       for iPast = 0:1
         selVar        = isPastVar == iPast;
@@ -113,8 +116,11 @@ function plotBehaviorPastInfluence(modelFile)
           title(axs, [model.experiment{aniIndex(iAni)} ' : ' taskLabel{iModel}], 'FontWeight', 'normal');
           nudge(axs, [-0.15 0 0.15 0]);
         else
-          nudge(axs, [0.01 0 -0.1 0]);
+          nudge(axs, [-0.01 0 -0.1 0]);
           ylabel(axs, 'Weight to predict saccade');
+        end
+        if iAni > 1
+          nudge(axs, [0.02 0]);
         end
         line('parent', axs, 'xdata', xRange, 'ydata', [0 0], 'linestyle', '-.', 'linewidth', 1, 'color', [1 1 1]*0.7);
 

@@ -23,6 +23,7 @@ function decodeTrialOutcome(dataFile, baselineTrials, lazy)
   cfg.maxCueStart     = 1000;            % maximum allowed interval from fixation on to cue presentation, in ms
   cfg.selectConditions= 1:2;            % keep only trials with these condition_code
   cfg.selectPastCond  = 1:2;            % keep only trials with these past_condition
+%   cfg.selectPastCond  = []; 
   cfg.minNumTrials    = 10;             % minimum number of trials for fitting models
   
   % Configuration for model fitting
@@ -48,8 +49,9 @@ function decodeTrialOutcome(dataFile, baselineTrials, lazy)
 
   %% Specify experimental variables that are included in the model
   cfg.behavCategories = rowvec(fieldswithvalue(data.experiment.type, 'value'));
-%   cfg.behavCategories = setdiff(cfg.behavCategories, {'trial_nr', 'reward_duration', 'saccade_amplitude', 'saccade_direction', 'past_saccade', 'past_condition', 'past_C'});
+%   cfg.behavCategories = setdiff(cfg.behavCategories, {'trial_nr', 'reward_duration', 'saccade_amplitude', 'saccade_direction', 'past_saccade', 'past_C', 'C_location'});
   cfg.behavCategories = setdiff(cfg.behavCategories, {'trial_nr', 'reward_duration', 'saccade_amplitude', 'condition_code', 'past_condition', 'past_C', 'C_location'});
+%   cfg.behavCategories = setdiff(cfg.behavCategories, {'trial_nr', 'reward_duration', 'saccade_amplitude', 'condition_code', 'past_gap', 'past_condition', 'past_C', 'past_saccade'});
   
   %% Define output file
   [path,name,ext]     = parsePath(dataFile);
@@ -64,8 +66,12 @@ function decodeTrialOutcome(dataFile, baselineTrials, lazy)
   %% Apply trial-level selections
 %   longfigure; hold on; plot(arrayfun(@(x) numel(x.trials), data.cellData))
   for iCell = 1:numel(data.cellData)
-    data.cellData(iCell).trials( ~ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions) )  = [];
-    data.cellData(iCell).trials( ~ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond  ) )  = [];
+    if ~isempty(cfg.selectConditions)
+      data.cellData(iCell).trials( ~ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions) )  = [];
+    end
+    if ~isempty(cfg.selectPastCond)
+      data.cellData(iCell).trials( ~ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond  ) )  = [];
+    end
   end
 %   plot(arrayfun(@(x) numel(x.trials), data.cellData))
   

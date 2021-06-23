@@ -581,10 +581,10 @@ function showCellsInHierarchy(hObject, event, hGraph, hSelect, varargin)
     drawnow;
     
     %% Plot predictions across cells
-    hFig                = plotPredictionByCondition(models, varargin{:});
+%     hFig                = plotPredictionByCondition(models, varargin{:});
     
     %% Plot regressors per cell
-    %{
+%     %{
     hFig                = gobjects(numel(models),2);
     for iModel = 1:numel(models)
       hFig(iModel,2)    = plotRegressorsByCondition(models{iModel}, varargin{:});

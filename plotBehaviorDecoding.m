@@ -24,12 +24,25 @@ function plotBehaviorDecoding(modelFile)
   cfg.confIntFcn      = [normcdf([-1 1],0,1); 0.025 0.975];
   cfg.significance    = 0.05;
 
+  %%
+  vetoEvents          = ismember(cfg.behavEvents, {'cue_start', 'choice_target'});
+  cfg.behavEvents(vetoEvents) = [];
+  
+  
   %% Plots for each decoded quantity
 %   %{
   [pan, shape, fig]   = makePanels( [numel(cfg.behavCategories),numel(cfg.behavEvents)], cfg.animal, cfg.animal     ...
                                   , 'aspectratio', 1.25, 'twosided', true, 'maxsubplotsize', 200 );
   for iBehav = 1:numel(cfg.behavCategories)
-    plotDecodingStatistics(pan, iBehav, shape, cat(1,decoder.(cfg.behavCategories{iBehav})), 2, cfg);
+    %%
+    catDecoder        = cat(1,decoder.(cfg.behavCategories{iBehav}));
+    for iCell = 1:numel(catDecoder)
+      if ~isempty(catDecoder(iCell).model)
+        catDecoder(iCell).model(vetoEvents) = [];
+      end
+    end
+    
+    plotDecodingStatistics(pan, iBehav, shape, catDecoder, 2, cfg);
   end
   %}
   
@@ -111,14 +124,14 @@ function iRow = plotDecodingStatistics(pan, startRow, shape, decoder, averageAcc
       yRange          = [0, 1];
 %       yRange          = [0, max(accuracy(:,:,iDecode),[],'all')];
       xlabel(axs, sprintf('Time from %s', strrep(model.alignment,'_',' ')));
-      ylabel(axs, sprintf('%s accuracy', strrep(decoder(1).variable,'_',' ')));
+      ylabel(axs, sprintf('%s accuracy', strrep(strrep(strrep(decoder(1).variable,'_',' '), 'condition', 'outcome'), ' code', '')));
       set(axs, 'xlim', alignedTime([1 end]), 'ylim', yRange);
       if ~averageAccuracy
         title(axs, sprintf('%s = %s', strrep(decoder(1,iDecode).variable,'_',' '), mat2str(decoder(1,iDecode).values)), 'FontWeight', 'normal');
       end
 
       line('parent', axs, 'xdata', [0 0], 'ydata', yRange, 'linewidth', 1.5, 'linestyle', ':', 'color', [1 1 1]*0.7);
-      line('parent', axs, 'xdata', alignedTime, 'ydata', nanmean(nullAccuracy(:,:,iDecode),2), 'linewidth', 1.5, 'linestyle', '-.', 'color', [1 1 1]*0.5);
+      line('parent', axs, 'xdata', alignedTime, 'ydata', mean(nullAccuracy(:,:,iDecode),2,'omitnan'), 'linewidth', 1.5, 'linestyle', '-.', 'color', [1 1 1]*0.5);
       bandplot(axs, alignedTime, accuracy(:,:,iDecode), cfg.confIntFcn);
 %     text(alignedTime(end), nanmean(nullAccuracy(:)), ' (chance)', 'parent', axs, 'fontsize', 14, 'color', [1 1 1]*0.5, 'clipping', 'off');
 

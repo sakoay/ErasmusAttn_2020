@@ -23,6 +23,7 @@ function fig = plotFitDependencies(model, description)
 
   modelSpecs              = cellfun(@(x) strjoin(formatVariableSpecifications(sort(x.categories()),conditionCodes,true), ' & '), cat(1,model{:}), 'UniformOutput', false);
   modelSpecs              = strrep(modelSpecs, 'past ', 'past-');
+  modelSpecs              = strrep(modelSpecs, '-saccade', '-sacc');
   [modelSpecs{cellfun(@isempty, modelSpecs)}] = deal('(n.s.)');
   
   %% Replace small categories with more generic labels
@@ -61,7 +62,7 @@ function fig = plotFitDependencies(model, description)
 
   
   %% Configure plots
-  [pan,shape,fig]         = makePanels( numel(model), description, [description ' (proportions of cells)'], 'maxsubplotsize', 500, 'panelmargins', struct('b',5,'r',80) );
+  [pan,shape,fig]         = makePanels( numel(model), description, [description ' (proportions of cells)'], 'maxsubplotsize', 500, 'panelmargins', struct('b',5,'r',100) );
   
   %% Plot pie chart for proportions of cells with various model specializations
   for iAni = 1:numel(model)
@@ -82,7 +83,7 @@ function fig = plotFitDependencies(model, description)
 %     set(hLabels, 'fontsize', 13);
     
     for iType = 1:numel(phat)
-      if phat(iType) < 0.05
+      if phat(iType) < 0.03
         continue
       end
       propLabel           = sprintf('\\fontsize{13}%.0f_{-%.0f}^{+%.0f}%%', 100*phat(iType), 100*(phat(iType) - pci(iType,1)), 100*(pci(iType,2) - phat(iType)));

@@ -114,6 +114,23 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
         source.saccade_onset  = source.saccade_landmarks(1);
       end
       
+      %% HACK : reinterpret trial start as "fixation" start for random reward trials
+      if source.condition_code == 4
+        %% Adjust timings of behavioral events
+        for what = fieldswithvalue(experiment.type, 'timing')'
+          if source.(what{:}) >= 0
+            source.(what{:})  = double(source.(what{:})) - double(source.trial_start);
+          end
+        end
+        source.fixon2fixon    = double(source.fixon2fixon) - double(source.trial_start);
+        source.fix_on         = 0;
+        
+        %% Adjust spike timings
+        for what = fieldswithvalue(experiment.type, 'spike train')'
+          source.(what{:})    = source.(what{:}) - source.trial_start/1000;   % in seconds
+        end
+      end
+      
       %% Flatten past-trial fields for convenience
       for what = fieldnames(source.n_minus_1)'
         source.(['past_', regexprep(what{:},'_.*','')]) = source.n_minus_1.(what{:});
@@ -167,7 +184,7 @@ function convertToGLMData(data, dataLabel, outputPath, timeBinMS)
             trial.(info{iField})     = ephys;
           case 'timing'
             %% Align timing info to trial start instead of 0 = fixation on
-            if source.condition_code == 4
+            if source.condition_code == 4 && source.(info{iField}) < 0
               %% Special case for non-trials
               trial.(info{iField})   = nan;
             else
