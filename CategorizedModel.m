@@ -487,7 +487,10 @@ classdef CategorizedModel < handle
         options                       = fitOptions;
         options.lambda                = lambdaRatio;
         options.groups                = int32(accumfun(2, @(x) x*ones(1,obj(iObj).design.dspec.covar(x).edim), 1:numel(obj(iObj).design.dspec.covar)));
-        options.groups(end+1:size(obj(iObj).design.X,2))  = 0;
+%         options.groups(end+1:size(obj(iObj).design.X,2))  = 0;
+        if ~isempty(obj(iObj).design.biasCol)
+          options.groups(obj(iObj).design.biasCol)        = 0;
+        end
         options.groups(obj(iObj).design.constCols)        = [];
       
         %% Define cross-validation selection and shuffled data

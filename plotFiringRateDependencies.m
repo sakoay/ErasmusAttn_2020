@@ -1,13 +1,158 @@
 function model = plotFiringRateDependencies(modelFile)
   
   %% Load data
-  model                   = cell(size(modelFile));
+  model                     = cell(size(modelFile));
   for iFile = 1:numel(modelFile)
-    model{iFile}          = load(modelFile(iFile).name);
+    model{iFile}            = load(modelFile(iFile).name);
+    
+    %% Postprocessing 
+    cfg                     = model{iFile}.cfg;
+    catLabel                = regexprep(regexprep(cfg.behavConditions, '^(past)_(.)', '$1${upper($2)}'), '_.*', '');
+    unspecializedModel      = model{iFile}.unspecializedModel;
+    hierarchicalModel       = model{iFile}.hierarchicalModel;
+    prediction              = cell(size(unspecializedModel));
+    parfor iCell = 1:numel(unspecializedModel)
+      prediction{iCell}     = modelTrialPredictions(unspecializedModel{iCell}, hierarchicalModel{iCell}, cfg, catLabel);
+    end
+    model{iFile}.prediction = [prediction{:}];
+  end
+
+  %% Proportions of cells with different dependencies on behavioral conditions
+  hierarchicalModel         = cellfun(@(x) x.hierarchicalModel, model, 'uniformoutput', false);
+  plotFitDependencies(hierarchicalModel, 'GLM model dependencies');
+  
+  %% 
+  plotCategoryPredictions(hierarchicalModel, cellfun(@(x) x.prediction, model, 'uniformoutput', false), model{1}.cfg);
+  
+end
+
+function combo = modelTrialPredictions(refModel, model, cfg, categoryLabels)
+
+  %% Get frames corresponding to each trial
+  assert(numel(refModel) == 1);
+
+  [trialID, frames]   = SplitVec(refModel.design.trialX, 'equal', 'firstval', 'index');
+%   trialEpochs       = cellfun(@(x) refModel.design.dspec.expt.eventEpochs(x), frames, 'UniformOutput', false);
+
+  %% Preallocate output
+  combo               = mstruct(struct(), categoryLabels{:});
+  combo.trialFrames   = frames;
+  combo.rewardDur     = [refModel.design.dspec.expt.trial.reward_duration];
+  combo.baseline      = exp(full(refModel.design.X(:,refModel.design.biasCol)));
+  combo.unspecialized = full(refModel.prediction);
+  combo.prediction    = nan(size(refModel.prediction));
+  combo.target        = refModel.target;
+  combo.epoch         = refModel.design.dspec.expt.eventEpochs;
+  
+  %% Specialization categories and trial-specific values 
+  combo.categories    = model.categories();
+  combo.trialCateg    = accumfun(2, @(x) cat(1,refModel.design.dspec.expt.trial.(x)), combo.categories);
+  
+  %% Collect prediction of models across all trials
+  for iModel = 1:numel(model)
+    %% Find subset of trials predicted by this sub-model
+    [~,iTrial]        = ismember(model(iModel).design.trialIndices, trialID);
+    assert(all(iTrial > 0));
+    
+    %% Collect model prediction
+    combo.prediction([frames{iTrial}])      = model(iModel).prediction;
+%     [trialEpochs{iTrial}]
   end
   
-  %% Proportions of cells with different dependencies on behavioral conditions
-  plotFitDependencies(cellfun(@(x) x.hierarchicalModel, model, 'uniformoutput', false), 'GLM model dependencies');
+  %% Canonical epoch values
+  epochStart          = accumfun(2, @(x) cat(1,refModel.design.dspec.expt.trial.(x)), [cfg.behavEvents, 'duration']);
+  epochDuration       = median(diff(epochStart, 1, 2), 'omitnan');
+  combo.epochMSecs    = 5;
+  combo.trialEpochs   = accumfun(1, @(x) butlast(linspace(x,x+1,round(epochDuration(x)/combo.epochMSecs)+1)'), 1:numel(epochDuration));
+
+  %% Use linear interpolation to evaluate predictions at canonical epoch values
+  for what = {'baseline', 'unspecialized', 'prediction'}
+    prediction        = nan(numel(combo.trialEpochs), numel(frames));
+    for iTrial = 1:numel(frames)
+      epoch                 = combo.epoch(frames{iTrial});
+      predict               = combo.(what{:})(frames{iTrial});
+      sel                   = ~isnan(epoch);
+      prediction(:,iTrial)  = interp1( epoch(sel), predict(sel), combo.trialEpochs, 'linear', nan );
+    end
+    combo.(['trial' titleCase(what{:})])    = prediction;
+    
+%     assert(all(isfinite(prediction(:))));
+  end
+  combo.trialBaseline(2:end,:)              = [];
+
+  %% Category trial-average predictions
+  combo.categoryValues= cell(size(combo.categories));
+  for iCat = 1:numel(combo.categories)
+    [combo.categoryValues{iCat},~,catIndex] = unique(combo.trialCateg(:,iCat));
+    catLabel          = combo.categories{iCat};
+    if strncmp(catLabel, 'past_', 5)
+      catLabel(6)     = upper(catLabel(6));
+      catLabel(5)     = [];
+    end
+    catLabel          = regexprep(catLabel, '_.*', '');
+    isRewarded        = combo.rewardDur(:) > 0;
+    
+    for what = {'unspecialized', 'prediction'}
+      prediction      = combo.(['trial' titleCase(what{:})]);
+      catPrediction   = nan(numel(combo.trialEpochs), numel(combo.categoryValues{iCat}), 2);
+      for iValue = 1:numel(combo.categoryValues{iCat})
+        for iRwd = 0:1
+          selTrials   = (catIndex == iValue) & (isRewarded == iRwd);
+          catPrediction(:,iValue,iRwd+1)  = mean(prediction(:,selTrials) ./ combo.trialBaseline(:,selTrials), 2, 'omitnan');
+        end
+      end
+      combo.(catLabel).(what{:})  = catPrediction;
+    end
+      
+    %% Define modulation strength
+    combo.(catLabel).modulation          ...
+                      = sqrt(mean((combo.(catLabel).prediction ./ combo.(catLabel).unspecialized - 1).^2, [1 3], 'omitnan'));
+%                       = mean(abs(combo.(catLabel).prediction ./ combo.(catLabel).unspecialized - 1));
+  end
+  
+end
+
+function fig = plotCategoryPredictions(model, combo, cfg)
+
+
+  %% Category trial-average predictions
+  catLabel            = regexprep(regexprep(cfg.behavConditions, '^(past)_(.)', '$1${upper($2)}'), '_.*', '');
+  modStrength         = cell(size(combo));
+  for iAni = 1:numel(combo)
+%     modStrength{iAni} = -0.1 * ones(numel(combo{iAni}), numel(catLabel));
+    modStrength{iAni} = nan(numel(combo{iAni}), numel(catLabel));
+    for iCat = 1:numel(catLabel)
+      hasModulation   = arrayfun(@(x) isfield(x.(catLabel{iCat}), 'modulation'), combo{iAni});
+      modStrength{iAni}(hasModulation,iCat) = arrayfun(@(x) mean(x.(catLabel{iCat}).modulation), combo{iAni}(hasModulation));
+    end
+  end
+  
+  %%
+  for iCat = 1:numel(catLabel)
+    figure; hold on; 
+    for iAni = 1:numel(combo)
+      histogram(min(modStrength{iAni}(:,iCat),1,'includenan'), linspace(0,1,50), 'normalization', 'pdf');
+    end
+    [isSigni, pValue] = kstest2(modStrength{1}(:,iCat), modStrength{2}(:,iCat));
+    title(sprintf('%s : %.3g', catLabel{iCat}, pValue));
+  end
+  
+  %%
+  for iAni = 1:numel(combo)
+    saccadeCell       = find(modStrength{iAni}(:,1) > 0 & modStrength{iAni}(:,end) > 0);
+    animal            = regexprep(model{iAni}{1}(1).design.dspec.expt.id, '_.*', '');
+    [pan,shape]       = makePanels(numel(saccadeCell), animal, [animal ': gap & saccade modulated']);
+    for iCell = 1:numel(saccadeCell)
+      axs             = selectPanel(pan,iCell,shape);
+      plot(axs, combo{iAni}(saccadeCell(iCell)).trialEpochs, combo{iAni}(saccadeCell(iCell)).gap.prediction(:,:,end) - combo{iAni}(saccadeCell(iCell)).gap.unspecialized(:,:,end));
+%       hold(axs, 'on');
+%       plot(axs, combo{iAni}(saccadeCell(iCell)).trialEpochs,combo{iAni}(saccadeCell(iCell)).gap.prediction(:,:,end));
+%       plot(axs, combo{iAni}(saccadeCell(iCell)).trialEpochs, combo{iAni}(saccadeCell(iCell)).gap.unspecialized(:,:,end), 'k');
+      set(axs, 'xlim', [1, numel(cfg.behavEvents)+1], 'xtick', 1:numel(cfg.behavEvents)+1, 'xticklabel', [regexprep(cfg.behavEvents,'_.*',''), 'end'], 'xticklabelrotation', 90, 'ylim', [-1 1]);
+      ylabel(axs, 'specialized - unspecialized');
+      title(axs, mean(combo{iAni}(saccadeCell(iCell)).(catLabel{iCat}).modulation));
+    end
+  end
   
 end
 

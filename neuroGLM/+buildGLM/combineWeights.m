@@ -15,8 +15,12 @@ dspec = dm.dspec;
 binSize = dspec.expt.binSize;
 
 if isfield(dm, 'biasCol') % undo z-score operation
-    wout.bias = w(dm.biasCol);
-    w(dm.biasCol) = [];
+    %% SAK : fixed biasCol addressing which must take into account the removed constCols
+    biasCol = false(size(dm.constCols));
+    biasCol(dm.biasCol) = true;
+    biasCol(dm.constCols) = [];
+    wout.bias = w(biasCol);
+    w(biasCol) = [];
 end
 
 if isfield(dm, 'zscore') % undo z-score operation

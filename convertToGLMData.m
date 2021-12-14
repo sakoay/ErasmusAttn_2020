@@ -10,7 +10,7 @@
 % ==========
 %   Plot data from a particular monkey:
 %     [aniName, ~, aniIndex] = unique({subset_cells.monkey});
-%     for iAni = 1:numel(aniName); convertToGLMData(subset_cells(aniIndex==iAni), aniName{iAni}, 'C:\Neuroscience\ErasmusAttn'); end
+%     for iAni = 1:numel(aniName); convertToGLMData(subset_cells(aniIndex==iAni), aniName{iAni}, 'D:\Neuroscience\ErasmusAttn'); end
 %
 % Created :  05-Oct-2020 14:02:23
 % Author  :  Sue Ann Koay (koay@princeton.edu)

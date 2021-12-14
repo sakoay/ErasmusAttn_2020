@@ -34,8 +34,6 @@ if strcmpi(shape, 'raised cosine')
     BBstm = bfun(ttb-repmat(bcenters,nkbins,1), width);
 elseif strcmpi(shape, 'progressive cosine x2')
     %% SAK : cosine bumps with progressively x2 increases in width and spacing, with the first component at zero
-    % For raised cosine, the spacing between the centers must be 1/4 of the
-    % width of the cosine
     sigma = nkbins * 2 / (2^nBases - 1); % width of first bump
     width = 2.^(0:nBases-1) * sigma; % width of each bump
     bcenters = 1 + [0, (2.^(2:nBases) - 2)*sigma/4];    % location of each bump center
@@ -43,9 +41,7 @@ elseif strcmpi(shape, 'progressive cosine x2')
     BBstm = bfun(ttb-bcenters, width);
 %     figure; plot(BBstm)
 elseif strcmpi(shape, 'progressive cosine x1.5')
-    %% SAK : cosine bumps with progressively x2 increases in width and spacing, with the first component at zero
-    % For raised cosine, the spacing between the centers must be 1/4 of the
-    % width of the cosine
+    %% SAK : cosine bumps with progressively x1.5 increases in width and spacing, with the first component at zero
     sigma = nkbins / ((3/2)^nBases - 1); % width of first bump
     width = (3/2).^(0:nBases-1) * sigma; % width of each bump
     bcenters = 1 + [0, ((3/2).^(1:nBases-1) - 1)*sigma];    % location of each bump center
@@ -53,6 +49,22 @@ elseif strcmpi(shape, 'progressive cosine x1.5')
     BBstm = bfun(ttb-bcenters, width);
     
 %     longfigure(2,0.5); plot((0:nkbins-1) * duration / nkbins, BBstm,'linewidth',1.5); xlabel('Time from event (ms)'); ylabel('Basis function')
+
+elseif strcmpi(shape, 'progressive cosine x2 off0')
+    %% SAK : cosine bumps with progressively x2 increases in width and spacing, with the first component offset from zero
+    sigma = nkbins * 4 / (3*2^nBases - 2); % width of first bump
+    width = 2.^(0:nBases-1) * sigma; % width of each bump
+    bcenters = 1 + (2.^(1:nBases) - 1)*sigma/2;    % location of each bump center
+    bfun = @(x,period)((abs(x./period)<0.5).*(cos(x*2*pi./period)*.5+.5));
+    BBstm = bfun(ttb-bcenters, width);
+    
+elseif strcmpi(shape, 'progressive cosine x1.5 off0')
+    %% SAK : cosine bumps with progressively x1.5 increases in width and spacing, with the first component offset from zero
+    sigma = nkbins * 3 * 2^nBases / (4*3^nBases - 3*2^nBases); % width of first bump
+    width = (3/2).^(0:nBases-1) * sigma; % width of each bump
+    bcenters = 1 + ((3/2).^(1:nBases) - 1)*sigma;    % location of each bump center
+    bfun = @(x,period)((abs(x./period)<0.5).*(cos(x*2*pi./period)*.5+.5));
+    BBstm = bfun(ttb-bcenters, width);
     
 elseif strcmpi(shape, 'boxcar')
     width = nkbins / nBases;

@@ -313,7 +313,8 @@ function fig = plotRegressorsByCondition(model, description, cfg, showDetails)
           continue
         end
         
-        response          = exp(model(iModel).regressors.bias + regressor.response);
+        response          = exp(0*model(iModel).regressors.bias + regressor.response);
+%         response          = model(iModel).regressors.bias + regressor.response;
         yRange(iReg,iCat) = max([yRange(iReg,iCat); response]);
         line( 'parent', axs, 'xdata', regressor.time, 'ydata', response   ...
             , 'color', catColor(catIndex{1}(iModel),:), 'linewidth', 1+selModel, 'linestyle', lineStyle{selModel+1} );

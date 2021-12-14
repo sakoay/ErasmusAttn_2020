@@ -1,4 +1,4 @@
-% ff = rdir('C:\Neuroscience\ErasmusAttn\glmExpt_*.mat');
+% ff = rdir('D:\Neuroscience\ErasmusAttn\glmExpt_*_25ms.mat');
 % for ii = 1:numel(ff); fitSingleCellGLM(ff(ii).name); end
 function fitSingleCellGLM(dataFile, baselineTrials, lazy)
 
@@ -34,6 +34,7 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
   
   % Maximum duration of neural responses per behavioral event
   cfg.eventDuration   = 1500;           % in ms
+%   cfg.eventDuration   = 1000;           % in ms
   cfg.eventNBasis     = 5;              % number of basis functions to use per event-response
 %   cfg.eventDuration   = 2000;           % in ms
 %   cfg.eventNBasis     = 5;              % number of basis functions to use per event-response
@@ -62,7 +63,7 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
   cfg.behavConditions = rowvec(fieldswithvalue(data.experiment.type, 'value'));
   
   % Overly many basis functions can lead to overfitting
-  cfg.behavEvents(~cellfun(@isempty, regexp(cfg.behavEvents, '_stop$', 'once')))  = [];
+  cfg.behavEvents(~cellfun(@isempty, regexp(cfg.behavEvents, '(^cue_|_stop$)', 'once')))  = [];
   
   % Not sure how to deal with these yet
   cfg.behavConditions = setdiff(cfg.behavConditions, {'trial_nr', 'reward_duration', 'saccade_amplitude'});
@@ -94,13 +95,21 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
       continue
     end
     
+    %% No reward indicator for error trials
+    for iTrial = find([data.cellData(iCell).trials.reward_duration] == 0)
+      data.cellData(iCell).trials(iTrial).reward_start  = nan;
+    end
+    
     %% Apply trial selection to cell data
     selTrials         = [data.cellData(iCell).trials.cue_start] <= cfg.maxCueStart                      ...
+                      & ~any(diff(accumfun(1, @(x) [data.cellData(iCell).trials.(x)], cfg.behavEvents), 1, 1) <= data.experiment.binSize, 1)  ...
                       & ismember([data.cellData(iCell).trials.condition_code], cfg.selectConditions)    ...
                       & ismember([data.cellData(iCell).trials.past_condition], cfg.selectPastCond)      ...
                       & arrayfun(@(x) ~isempty(x.SS), data.cellData(iCell).trials(:)')                  ... not sure why some trials can have zero spikes
                       & arrayfun(@(x) ~isnan(x.saccade_onset), data.cellData(iCell).trials(:)')         ... must have timing info for all events 
                       ;
+%     figure; imagesc(diff(accumfun(1, @(x) [data.cellData(iCell).trials.(x)], cfg.behavEvents), 1, 1) > data.experiment.binSize)
+                    
     experiment        = data.experiment;
     experiment.id     = [data.cellData(iCell).monkey '_' data.cellData(iCell).cell_id];
     experiment.trial  = data.cellData(iCell).trials(selTrials);
@@ -111,7 +120,7 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
       continue;
     end
     
-    assert(all( arrayfun(@(x) all(isfinite(cellfun(@(y) x.(y), cfg.behavEvents))), experiment.trial) ));
+%     assert(all( arrayfun(@(x) all(isfinite(cellfun(@(y) x.(y), cfg.behavEvents))), experiment.trial) ));
     
     %% Divide trials into categories according to various stimulus and outcome variables
     trialConditions   = accumfun(2, @(x) cat(1,experiment.trial.(x)), cfg.behavConditions);
@@ -128,21 +137,19 @@ function fitSingleCellGLM(dataFile, baselineTrials, lazy)
     modelSpecs        = buildGLM.initDesignSpec(experiment);
 
     % Responses to behavioral events that vary smoothly with time after the event
-    basisFcn          = basisFactory.makeSmoothTemporalBasis('progressive cosine x1.5', cfg.eventDuration, cfg.eventNBasis, experiment.binfun);
+    basisFcn          = basisFactory.makeSmoothTemporalBasis('progressive cosine x1.5 off0', cfg.eventDuration, cfg.eventNBasis, experiment.binfun);
+    basisFcn.B        = basisFcn.B ./ max(basisFcn.B,[],1);
 %     figure; plot(basisFcn.tr * experiment.binSize,basisFcn.B)
     for iVar = 1:numel(cfg.behavEvents)
       modelSpecs      = buildGLM.addCovariateTiming(modelSpecs, cfg.behavEvents{iVar}, cfg.behavEvents{iVar}, experiment.desc.(cfg.behavEvents{iVar}), basisFcn);
     end
 
     %% Specify design matrix using the above parameters
-    [design,trialBin] = buildGLM.compileSparseDesignMatrix(modelSpecs, 1:numel(experiment.trial));
+    [design,trialBin,eventEpochs] = buildGLM.compileSparseDesignMatrix(modelSpecs, 1:numel(experiment.trial));
     design.dspec.expt.numTimeBins = size(design.X,1);
     design.dspec.expt.trialBins   = trialBin;
- 
-    %% Scale regressors so that they have unit standard deviation 
-%     design.X          = unitSpreadDirection(design.X, false, false);
-%     longfigure; imagesc(design.X'); tempscale
-    
+    design.dspec.expt.eventEpochs = eventEpochs;
+
     %% Optional scaling of regressors for each trial by the moving average firing rate 
     if ~isempty(baselineTrials)
       meanRate        = arrayfun(@(x) numel(x.SS)/x.duration, experiment.trial);    % rate in 1/ms
@@ -231,7 +238,10 @@ function [model, altModels] = buildHierarchicalModel(basicModel, conditionLabels
     %% Select model with the best relative likelihood w.r.t. the less specialized parent model
     relLikeli               = cellfun(@(x) x.relativeLikelihood(), candModel);
     if any(isnan(relLikeli))
-      error('buildHierarchicalModel:relLikeli', 'Invalid log-likelihood encountered for model(s) %s', num2str(find(~isfinite(relLikeli))));
+      warning('buildHierarchicalModel:relLikeli', 'Invalid log-likelihood encountered for model(s) %s', mat2str(find(~isfinite(relLikeli))));
+      veto                  = ~isfinite(relLikeli);
+      relLikeli(veto)       = [];
+      candModel(veto)       = [];
     end
     
     [sortedRelLikeli,iOrder]= sort(relLikeli, 'ascend');
