@@ -1,4 +1,4 @@
-% ff = rdir('C:\Neuroscience\ErasmusAttn\glmExpt_*.mat');
+% ff = rdir('D:\Neuroscience\ErasmusAttn\glmExpt_*.mat');
 % for ii = 1:numel(ff); decodeTrialOutcome(ff(ii).name); end
 function decodeTrialOutcome(dataFile, baselineTrials, lazy)
 

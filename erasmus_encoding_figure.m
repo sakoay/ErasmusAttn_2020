@@ -1,29 +1,30 @@
 function erasmus_encoding_figure(modelFile)
 
   %% Figure setup
-%   PaneledFigure([4 4], 'small')
+  PaneledFigure.formatOptions('axes', 'TickDir', 'out');
+  
   layout        = [   1   1   7   9  11  13     ...
                   ;   2   2   7  10  12  14     ...
-                  ;   3   4   8  15  17  19     ...
-                  ;   5   6   8  16  18  20     ...
+                  ;   3   5   8  15  17  19     ...
+                  ;   4   6   8  16  18  20     ...
                   ];
   labelOffset   = [ 0.35j   0   0     0.4-0.45j   0   0     ...
-                  ;     0   0   0.12  0           0   0     ...
+                  ;     0   0   0.98  0           0   0     ...
                   ;   0.3   0   0     0.4-0.45j   0   0     ...
                   ;     0   0   0.2   0           0   0     ...
                   ];
-  figMain       = PaneledFigure(layout, [125 125], [10 10 10 10], [0 15]);
-  figMain.newGroup([2 4:6 10:14 16:20]) = false;
+  figMain       = PaneledFigure(layout, [150 150], [10 10 10 10], [10 20]);
+  figMain.newGroup([2 4:6 8 10:14 16:20]) = false;
   iMain         = 0;
 
   %% Custom panel sizes
   nudge(figMain.panel(1:2), [0 0 -0.6 0]);
   nudge(figMain.panel(1), [0 0.05]);
   nudge(figMain.panel(2), [-0.6 -0.1 0.6 0]);
-  nudge(figMain.panel([3 5]), [-0.05 0]);
-  nudge(figMain.panel([4 6]), [-0.6 0]);
-  nudge(figMain.panel(7:8), [-0.7 0 1.2 -0.5]);
-  nudge(figMain.panel(7), [0 0.45]);
+  nudge(figMain.panel(3:4), [-0.05 0]);
+  nudge(figMain.panel(5:6), [-0.6 0]);
+  nudge(figMain.panel(7:8), [-0.9 0 1.2 -0.5]);
+%   nudge(figMain.panel(7), [0 0.3]);
   nudge(figMain.panel(8), [0 -0.5]);
   nudge(figMain.panel(9:20), [-0.15 0.05 0.3 0]);
   nudge(figMain.panel(9:14), [0 0.15]);
@@ -52,17 +53,39 @@ function erasmus_encoding_figure(modelFile)
     model{iFile}.prediction = [prediction{:}];
   end
   
+  %% Color schemes
+  cfg.dirLabel        = { 'D'   'U'    'R'    'L' };
+  cfg.dirValues       = [ 270    90      0    180 ];
+  cfg.dirColor        = [ 130   213     27     64     ...
+                        ; 111   180    105    176     ...
+                        ;  59   100     99    166     ...
+                        ]' / 255;
+  cfg.aniLabel        = { 'Mi'  'Mo'  };
+  cfg.aniColor        = [  39   238     ...
+                        ; 170    42     ...
+                        ; 225   123     ...
+                        ]' / 255;
+
+  %% Order models by animal name
+  [~,iOrder]          = ismember( cfg.aniLabel                                                                    ...
+                                , cellfun( @(x) titleCase(at(x.unspecializedModel{1}.design.dspec.expt.id,1:2))   ...
+                                         , model, 'UniformOutput', false )                                        ...
+                                );
+  model               = model(iOrder);
+                      
+  %% ===============================================================================================
+                      
   %% Model illustration
-  iMain         = plotModelIlustration(figMain, iMain, model{1}.unspecializedModel{1});
+  iMain         = plotModelIlustration(figMain, iMain, model{1}.unspecializedModel{1}, cfg);
   
   %% Modulation strengths
-  iMain         = plotModulationStrength(figMain, iMain, model);
+  iMain         = plotModulationStrength(figMain, iMain, model, cfg);
   
   %% Specialization categories
-  iMain         = plotModulationCategories(figMain, iMain, model);
+  iMain         = plotModulationCategories(figMain, iMain, model, cfg);
   
   %% Model predictions for example cells
-  iMain         = plotModelPredictions(figMain, iMain, model);
+  iMain         = plotModelPredictions(figMain, iMain, model, cfg);
   
   %% Save figures
   codeFile                = mfilename('fullpath');
@@ -105,9 +128,9 @@ function combo = modelTrialPredictions(refModel, model, cfg, categoryLabels)
   
   %% Canonical epoch values
   epochStart          = accumfun(2, @(x) cat(1,refModel.design.dspec.expt.trial.(x)), [cfg.behavEvents, 'duration']);
-  epochDuration       = median(diff(epochStart, 1, 2), 'omitnan');
+  combo.epochDuration = median(diff(epochStart, 1, 2), 'omitnan');
   combo.epochMSecs    = 5;
-  combo.trialEpochs   = accumfun(1, @(x) butlast(linspace(x,x+1,round(epochDuration(x)/combo.epochMSecs)+1)'), 1:numel(epochDuration));
+  combo.trialEpochs   = accumfun(1, @(x) butlast(linspace(x,x+1,round(combo.epochDuration(x)/combo.epochMSecs)+1)'), 1:numel(combo.epochDuration));
 
   %% Use linear interpolation to evaluate predictions at canonical epoch values
   for what = {'baseline', 'unspecialized', 'prediction'}
@@ -156,39 +179,38 @@ function combo = modelTrialPredictions(refModel, model, cfg, categoryLabels)
   
 end
 
-function iPlot = plotModelIlustration(fig, iPlot, egModel)
+function iPlot = plotModelIlustration(fig, iPlot, egModel, cfg)
 
   %% Basis functions
   [axs,iPlot]   = fig.panel(iPlot);
   timeBin       = egModel.design.dspec.expt.binSize / 1000;   % in seconds
   time          = (0:size(egModel.design.dspec.covar(1).basis.B,1)-1) * timeBin;
-  color         = hydrangea(size(egModel.design.dspec.covar(1).basis.B,2));
+  color         = linspace(0, 0.7, size(egModel.design.dspec.covar(1).basis.B,2));
   
   set(axs, 'xlim', [0, egModel.design.dspec.covar(1).basis.param.duration/1000], 'ylim', [0 1.4], 'ytick', [], 'box', 'off');
-  xlabel(axs, 'Time {\itt} from event {\itk} (s)');
+  xlabel(axs, 'Time {\itt} from event {\itk} (sec)');
   ylabel(axs, 'Basis {\itb_i^k}({\itt})');
 
   for iBasis = 1:size(egModel.design.dspec.covar(1).basis.B,2)
-    line( 'parent', axs, 'xdata', time, 'ydata', egModel.design.dspec.covar(1).basis.B(:,iBasis)                                        ...
-        , 'linewidth', FormatDefaults.linewidthRegular, 'color', color(iBasis,:) );
-    text( egModel.design.dspec.covar(1).basis.centers(iBasis) * timeBin, 1.05, sprintf('{\\itb}_{%d}^{\\itk}',iBasis), 'color', color(iBasis,:)   ...
+    line( 'parent', axs, 'xdata', time, 'ydata', egModel.design.dspec.covar(1).basis.B(:,iBasis)    ...
+        , 'linewidth', FormatDefaults.linewidthRegular, 'color', [1 1 1]*color(iBasis) );
+    text( egModel.design.dspec.covar(1).basis.centers(iBasis) * timeBin, 1.05                       ...
+        , sprintf('{\\itb}_{%d}^{\\itk}',iBasis), 'color', [1 1 1]*color(iBasis)                    ...
         , 'fontsize', FormatDefaults.legendFontSize, 'horizontalalignment', 'center', 'verticalalignment', 'bottom' );
   end
 
   %% Model equations
   [axs,iPlot]   = fig.panel(iPlot);
-  set(axs, 'xlim', [0 2], 'ylim', [-0.3 3], 'ydir', 'reverse', 'clipping', 'off', 'xcolor', 'none', 'ycolor', 'none');
+  set(axs, 'xlim', [0 2], 'ylim', [0 4], 'ydir', 'reverse', 'clipping', 'off', 'xcolor', 'none', 'ycolor', 'none');
 
-  text(0.2, -0.3, '(optional) category {\itc} of trial', 'fontsize', FormatDefaults.fontSize-1, 'horizontalalignment', 'left', 'verticalalignment', 'middle', 'color', FormatDefaults.darkGray);
-  text(0  ,  1  , 'Predict spike count {\ity}_{\itj}^{({\itc})}({\itt}) in trial {\itj}', 'fontsize', FormatDefaults.fontSize, 'horizontalalignment', 'left', 'verticalalignment', 'middle');
-  text(0  ,  2  , '~ Poisson\{exp[\mu_{\itj} + \Sigma_{\itk}\Sigma_{\iti}{\itw}_{\itik}^{({\itc})}{\itb_i^k}({\itt})]\}', 'fontsize', FormatDefaults.fontSize, 'horizontalalignment', 'left', 'verticalalignment', 'middle');
-%   text(0.2,  3.3, '{\itk} \in \{ fixation, C onset, delay, ... \}', 'fontsize', FormatDefaults.fontSize-1, 'horizontalalignment', 'left', 'verticalalignment', 'middle', 'color', FormatDefaults.darkGray);
+  text(0.4, -0.7, '{\itk} \in \{ fixation, C onset, delay, ... \}', 'fontsize', FormatDefaults.fontSize-1, 'horizontalalignment', 'left', 'verticalalignment', 'middle', 'color', FormatDefaults.darkGray);
+  text(0,  0.7, 'model selection: category {\itc} of trial', 'fontsize', FormatDefaults.fontSize-1, 'horizontalalignment', 'left', 'verticalalignment', 'middle', 'color', FormatDefaults.darkGray);
+  text(0,  2  , 'Predict spike count {\ity}_{\itj}^{({\itc})}({\itt}) in trial {\itj}', 'fontsize', FormatDefaults.fontSize, 'horizontalalignment', 'left', 'verticalalignment', 'middle');
+  text(0,  3  , '~ Poisson\{ exp[\mu_{\itj} + \Sigma_{\itk}\Sigma_{\iti}{\itw}_{\itik}^{({\itc})}{\itb_i^k}({\itt})] \}', 'fontsize', FormatDefaults.fontSize, 'horizontalalignment', 'left', 'verticalalignment', 'middle');
   
 end
 
-function iPlot = plotModulationStrength(fig, iPlot, model)
-
-  cfg                 = model{1}.cfg;
+function iPlot = plotModulationStrength(fig, iPlot, model, cfg)
 
   %% Average modulation strength across categorized predictions
   catLabel            = regexprep(regexprep(cfg.behavConditions, '^(past)_(.)', '$1${upper($2)}'), '_.*', '');
@@ -201,32 +223,33 @@ function iPlot = plotModulationStrength(fig, iPlot, model)
     end
   end
   
+  %% Sort categories by present- vs. past-trial categories
+  isPastCateg         = strncmp(catLabel, 'past', 4);
+  catLabel            = [colvec(sort(catLabel(~isPastCateg))); colvec(sort(catLabel(isPastCateg)))];
+  
   %% Distribution of modulation strengths vs. animal
-  iPlot = 2;
   strengthEdges       = linspace(0, 0.8, 25);
-  color               = [FormatDefaults.darkBlue; FormatDefaults.mediumPurple];
   for iCat = 1:numel(catLabel)
     [axs,iPlot]       = fig.panel(iPlot);
     
-    cla(axs)
     hold(axs, 'on');
-    xlabel(axs, sprintf('MI(%s)', strrep(strrep(catLabel{iCat}, 'Gap', '-gap'), 'Saccade', '-sacc')));
-    if mod(iCat,2) == 1
-      ylabel(axs, 'Freq. cells');
+    set(axs, 'xticklabelrotation', 90);
+    xlabel(axs, sprintf('modIdx(%s)', strrep(strrep(catLabel{iCat}, 'Gap', '-gap'), 'Saccade', '-sacc')));
+    if iCat < 3
+      ylabel(axs, 'Frequency of cells  ');
     end
     
     for iAni = 1:numel(model)
 %       freq            = histcounts(modStrength{iAni}(:,iCat), strengthEdges, 'normalization', 'pdf');
 %       line('parent', axs, 'xdata', strengthCenters, 'ydata', freq, 'color', color(iAni,:), 'linewidth', FormatDefaults.linewidthRegular);
-      histogram(modStrength{iAni}(:,iCat), strengthEdges, 'normalization', 'prob', 'facecolor', color(iAni,:), 'edgecolor', 'none');
+      histogram(modStrength{iAni}(:,iCat), strengthEdges, 'normalization', 'prob', 'facecolor', cfg.aniColor(iAni,:), 'edgecolor', 'none');
     end
     drawnow;
     
     %% Legend
     if iCat == 1
       axsPos          = get(axs, 'position');
-      aniName         = cellfun(@(x) regexprep(x.unspecializedModel{1}.design.dspec.expt.id, '_.*', ''), model, 'UniformOutput', false);
-      hLegend         = legend(axs, aniName, 'location', 'northoutside', 'numcolumns', 2);
+      hLegend         = legend(axs, cfg.aniLabel, 'location', 'northoutside', 'numcolumns', 2);
       set(axs, 'position', axsPos);
       nudge(hLegend, [0.08 0.02]);
     end
@@ -234,13 +257,13 @@ function iPlot = plotModulationStrength(fig, iPlot, model)
     %% P-value for whether there is a significant difference across animals
     [isSigni, pValue] = kstest2(modStrength{1}(:,iCat), modStrength{2}(:,iCat));
     yRange            = get(axs, 'ylim');
-    text( 0.8, yRange(2), sprintf('{\\itp} = %.1g', pValue), 'parent', axs, 'fontsize', FormatDefaults.legendFontSize   ...
+    text( 0.7, yRange(2), sprintf('{\\itp} = %.1g', pValue), 'parent', axs, 'fontsize', FormatDefaults.legendFontSize   ...
         , 'horizontalalignment', 'right', 'verticalalignment', 'top', 'color', FormatDefaults.darkGray );
   end
   
 end
 
-function iPlot = plotModulationCategories(fig, iPlot, model)
+function iPlot = plotModulationCategories(fig, iPlot, model, cfg)
 
   %% Get all categories by which each model is specialized
   experiment              = model{1}.hierarchicalModel{1}(1).design.dspec.expt;
@@ -295,7 +318,7 @@ function iPlot = plotModulationCategories(fig, iPlot, model)
   
   miscellaneous           = strncmp(modelType(iOrder), 'misc.', 5);
   unspecialized           = strcmp(modelType(iOrder), '(n.s.)');
-  typeColor(miscellaneous,:)  = repmat(linspace(0.35, 0.7, sum(miscellaneous))', 1, 3);
+  typeColor(miscellaneous,:)  = repmat(linspace(0.35, 0.75, sum(miscellaneous))', 1, 3);
   typeColor(unspecialized,:)  = [1 1 1];
   
   
@@ -303,7 +326,6 @@ function iPlot = plotModulationCategories(fig, iPlot, model)
   for iAni = 1:numel(model)
     %% Axis formatting
     experiment            = model{iAni}.hierarchicalModel{1}(1).design.dspec.expt;
-    animal                = regexprep(experiment.id, '_.*', '');
     [axs, iPlot]          = fig.panel(iPlot);
     
     %% Pie chart for proportions
@@ -313,7 +335,7 @@ function iPlot = plotModulationCategories(fig, iPlot, model)
 
     colormap(axs, typeColor);
     set(axs, 'visible', 'on', 'xcolor', 'none', 'ycolor', 'none');
-    hTitle                = title(axs, animal, 'fontweight', 'normal', 'horizontalalignment', 'right');
+    hTitle                = title(axs, cfg.aniLabel{iAni}, 'fontweight', 'normal', 'horizontalalignment', 'right');
     nudge(hTitle, [-0.2 0]);
     if iAni > 1
       nudge(hTitle, [0 0.1]);
@@ -339,14 +361,15 @@ function iPlot = plotModulationCategories(fig, iPlot, model)
       hLegend             = legend(strrep(modelType(iOrder), 'past-gap & saccade', 'past-gap & sacc'), 'location', 'northoutside', 'numcolumns', 2);
       set(axs, 'position', axsPos);
       nudge(hLegend, [0.05 0.05]);
+    else
+      %%
+      text(0, 1.7, multitext([],'Proportion of cells with','trial-type dependence'), 'parent', axs, 'fontsize', FormatDefaults.fontSize, 'horizontalalignment', 'center', 'verticalalignment', 'bottom');
     end
   end
   
 end
 
-function iPlot = plotModelPredictions(fig, iPlot, model)
-
-  cfg                 = model{1}.cfg;
+function iPlot = plotModelPredictions(fig, iPlot, model, cfg)
 
   %% Average modulation strength across categorized predictions
   catLabel            = regexprep(regexprep(cfg.behavConditions, '^(past)_(.)', '$1${upper($2)}'), '_.*', '');
@@ -373,19 +396,15 @@ function iPlot = plotModelPredictions(fig, iPlot, model)
     [~,iOrder]        = sort(modStrength{iAni}(modulatedCell,modIndex(1)), 'descend');
     modulatedCell     = modulatedCell(iOrder);
 
-    %% Experiment info and trial categories
-    experiment        = model{iAni}.unspecializedModel{1}(1).design.dspec.expt;
-    animal            = regexprep(experiment.id, '_.*', '');
-    catValues         = model{iAni}.prediction(modulatedCell(1)).categoryValues{strcmp(model{iAni}.prediction(modulatedCell(1)).categories, showCateg)};
-    catColor          = lines(numel(catValues));
-
     %% Predictions for a few example cells
     for iCell = 1:3
       %% Order predictions by category values
-      experiment      = model{iAni}.unspecializedModel{modulatedCell(iCell)}(1).design.dspec.expt;
+      experiment      = model{iAni}.unspecializedModel{modulatedCell(iCell)}.design.dspec.expt;
       prediction      = model{iAni}.prediction(modulatedCell(iCell));
       values          = prediction.categoryValues{strcmp(prediction.categories, showCateg)};
-      [~,iOrder]      = ismember(values, catValues);
+      [~,iOrder]      = ismember(values, cfg.dirValues);
+      epochs          = [0, cumsum(prediction.epochDuration)] / 1000;
+      time            = (0:numel(prediction.trialEpochs) - 1) * prediction.epochMSecs / 1000;
     
       %% Plot prediction for correct/error trials
       for iReward = [1 0]
@@ -394,33 +413,44 @@ function iPlot = plotModelPredictions(fig, iPlot, model)
 %         modulation    = prediction.(predCateg).prediction(:,iOrder,iReward+1) - prediction.(predCateg).unspecialized(:,iOrder,iReward+1);
         modulation    = prediction.(predCateg).prediction(:,iOrder,iReward+1);
         modulation    = modulation / (experiment.binSize/1000);     % convert to Hz
+        if iReward == 0
+          %% Indicate no info after what would have been a reward interval
+          modulation(prediction.trialEpochs >= numel(epochs) - 1,:) = nan;
+        end
+        
 %         refPred       = prediction.(predCateg).unspecialized(:,iOrder,iReward+1);
 %         line('parent', axs, 'xdata', prediction.trialEpochs, 'ydata', mean(refPred,2), 'linewidth', FormatDefaults.linewidthRegular, 'color', FormatDefaults.mediumGray);
-
         for iCat = 1:numel(iOrder)
-          line('parent', axs, 'xdata', prediction.trialEpochs, 'ydata', modulation(:,iCat), 'linewidth', FormatDefaults.linewidthRegular, 'color', catColor(iCat,:));
+          line('parent', axs, 'xdata', time, 'ydata', modulation(:,iCat), 'linewidth', FormatDefaults.linewidthRegular, 'color', cfg.dirColor(iCat,:));
         end
         
         %% Event onset labels
 %         yRange        = [-1 1] * 1.5;
         yRange        = roundRange([0,max(modulation(:))], 0.5);
-        set(axs, 'xlim', [1, numel(cfg.behavEvents)+1], 'xtick', 1:numel(cfg.behavEvents)+1, 'xgrid', 'on', 'ylim', yRange);
+        set(axs, 'xlim', [epochs(1), epochs(end-1)+1], 'xgrid', 'on', 'ylim', yRange);
         if iCell == 1 && iReward == 0
-          text( 0, yRange(2), 'Predicted firing rate (Hz)', 'parent', axs         ...
+          text( -0.2*(epochs(end-1)+1 - epochs(1)), yRange(2), 'Predicted firing rate (Hz)', 'parent', axs         ...
               , 'horizontalalignment', 'center', 'verticalalignment', 'bottom', 'fontsize', FormatDefaults.fontSize, 'rotation', 90 );
         end
         if iReward
           title(axs, sprintf('Cell %s', regexprep(experiment.id,'^[^_]*_','')), 'fontsize', FormatDefaults.legendFontSize, 'fontweight', 'normal');
-          set(axs, 'xticklabel', {});
+          set(axs, 'xtick', epochs(1:end-1), 'xticklabel', {});
+          
+          line( 'parent', axs, 'xdata', epochs(end-1), 'ydata', yRange(1) - 0.08*diff(yRange), 'clipping', 'off', 'marker', '^'   ...
+              , 'markersize', FormatDefaults.markerSizeLarge, 'markerfacecolor', [0 0 0], 'markeredgecolor', 'none' );
+          text( epochs(end-1), yRange(1), ['  ' regexprep(cfg.behavEvents{end},'_.*','')], 'parent', axs, 'color', [0 0 0]        ...
+              , 'fontsize', FormatDefaults.legendFontSize, 'verticalalignment', 'top', 'horizontalalignment', 'left' );
         else
-          set(axs, 'xticklabel', [regexprep(regexprep(cfg.behavEvents,'_.*',''),'^c$','C onset'), 'end'], 'xticklabelrotation', 90);
+          set(axs, 'xtick', epochs(1:end-2), 'xticklabel', regexprep(regexprep(cfg.behavEvents(1:end-1),'_.*',''),'^c$','C onset'), 'xticklabelrotation', 90);
         end
         
         %% Legend
-        if iCell == 3 && iReward
+        if iCell == 1 && iReward
+          text(epochs(4), yRange(end) + 0.23*diff(yRange), cfg.aniLabel{iAni}, 'parent', axs, 'fontsize', FormatDefaults.fontSize, 'horizontalalignment', 'center', 'verticalalignment', 'bottom');
+        elseif iCell == 3 && iReward
           drawnow;
           axsPos        = get(axs, 'position');
-          valueLabel    = strcat(arrayfun(@num2str, values, 'UniformOutput', false), '\circ');
+          valueLabel    = cfg.dirLabel;
           valueLabel{1} = [strrep(showCateg,'_',' '), ' = ', valueLabel{1}];
           hLegend       = legend(axs, valueLabel, 'location', 'northoutside', 'numcolumns', numel(values));
           set(axs, 'position', axsPos);
@@ -428,7 +458,7 @@ function iPlot = plotModelPredictions(fig, iPlot, model)
       end
       
       %% Indicate error trials
-      text( numel(cfg.behavEvents)+0.5, mean(yRange), 'ERROR', 'parent', axs, 'horizontalalignment', 'center', 'verticalalignment', 'middle'    ...
+      text( epochs(end-1) + 0.2, mean(yRange), 'ERROR', 'parent', axs, 'horizontalalignment', 'center', 'verticalalignment', 'middle'    ...
           , 'fontsize', FormatDefaults.legendFontSize, 'rotation', 90, 'color', FormatDefaults.mediumGray, 'fontweight', 'bold', 'background', [1 1 1] );
     end
   end
